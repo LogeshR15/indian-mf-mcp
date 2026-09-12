@@ -37,9 +37,17 @@ AGGREGATE_ROW_LABELS = {"sub total", "total", "grand total"}
 FOOTER_STOP_MARKERS = (
     "# traded", "notes & symbols", "notes:", "lumpsum investment performance",
     "sip investment performance", "quantitative indicators", "this product is suitable",
+    "total below investment grade", "details of intra scheme investments",
+    "hedging positions", "nav as on",
 )
 
+# Some AMCs (Tata) label the true fund-level 100% total "NET ASSETS" rather than "GRAND
+# TOTAL" or anything containing the word "total" at all — must be recognised explicitly or
+# it falls through as a spurious duplicate holding worth ~100% of NAV.
+_EXPLICIT_GRAND_TOTAL_LABELS = {"net assets", "total net assets"}
+
 AS_OF_RE = re.compile(r"as on\s+([A-Za-z]+ \d{1,2},?\s*\d{4})", re.IGNORECASE)
+AS_OF_NUMERIC_RE = re.compile(r"as on\s+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})", re.IGNORECASE)
 BENCHMARK_RE = re.compile(r"\(([A-Za-z0-9&/ ]*\bTRI\b[A-Za-z0-9&/ ]*)\)")
 
 
@@ -85,12 +93,18 @@ def _num(v):
     return None
 
 
+_TOTAL_WORD_RE = re.compile(r"\btotal\b", re.IGNORECASE)
+
+
 def _is_aggregate_label(text: str) -> bool:
-    """Match by prefix, not exact string — AMCs glue extra text onto the label
-    (e.g. UTI's "TOTAL:(a)  Listed/awaiting listing..." or "TOTAL:  EQUITY AND EQUITY
-    RELATED"), so an exact-match set silently lets these through as fake holdings."""
-    t = text.strip().lower()
-    return any(t.startswith(a) for a in AGGREGATE_ROW_LABELS)
+    """Match "total" as a whole word ANYWHERE in the label, not just as a prefix — AMCs are
+    inconsistent about where they put it: UTI prefixes ("TOTAL:(a) Listed...", "TOTAL :
+    <Scheme Name>"), Tata suffixes ("EQUITY & EQUITY RELATED TOTAL", "PORTFOLIO TOTAL"). A
+    prefix-only or exact-match check silently lets suffix-style totals through as fake
+    holdings (they have no ISIN/industry/quantity, only a value+pct, identical in shape to a
+    genuine standalone cash line like "NET CURRENT ASSETS" — the label text is the only
+    signal that distinguishes them)."""
+    return bool(_TOTAL_WORD_RE.search(text))
 
 
 def _asset_class_for(top_section: str, sub_section: str) -> str:
@@ -145,7 +159,9 @@ def _find_main_header_row(rows: list[tuple]) -> tuple[int, ColumnMap] | None:
         industry_col = find("industry", "rating")
         qty_col = find("quantity")
         value_col = next(
-            (idx for idx, t in enumerate(texts) if "market" in t and "value" in t), None
+            (idx for idx, t in enumerate(texts)
+             if ("market" in t and "value" in t) or ("mkt" in t and "val" in t)),
+            None,
         )
         if industry_col is None or qty_col is None or value_col is None:
             continue
@@ -162,6 +178,9 @@ def _find_as_of(rows: list[tuple]) -> str | None:
                 m = AS_OF_RE.search(c)
                 if m:
                     return m.group(1).strip()
+                m2 = AS_OF_NUMERIC_RE.search(c)
+                if m2:
+                    return m2.group(1).strip()
                 if "as on" in c.lower():
                     # some AMCs (e.g. SBI) put a real datetime in an adjacent cell rather
                     # than embedding the date in the label string itself.
@@ -253,21 +272,19 @@ def parse_portfolio_xlsx(raw: bytes, sheet_name: str | None = None) -> Portfolio
         if label and any(label.lower().startswith(m) for m in FOOTER_STOP_MARKERS):
             break
 
-        if label and label.strip().lower().startswith("grand total"):
+        if label and (label.strip().lower().startswith("grand total")
+                      or label.strip().lower() in _EXPLICIT_GRAND_TOTAL_LABELS):
             result.grand_total_market_value = _num(col_f)
             result.grand_total_pct_nav = _num(col_g)
             continue
 
-        # "TOTAL:", "TOTAL : <scheme name>" etc. as a grand-total fallback (some AMCs, e.g.
-        # UTI, never say "GRAND TOTAL" at all — the true fund-level total is just the LAST
-        # "total"-prefixed row in the file, after every sub-total). Only used as a fallback:
-        # an explicit "GRAND TOTAL" row (above) always wins and stops this from overwriting it.
-        if label and _is_aggregate_label(label) and result.grand_total_pct_nav is None:
-            val = _num(col_f)
-            if val is not None:
-                result.grand_total_market_value = val
-                result.grand_total_pct_nav = _num(col_g)
-            continue
+        if label and label.strip().lower() == "nil":
+            continue  # placeholder row for an empty section (e.g. "(B) Unlisted ... Nil")
+
+        # Any "*total*" row (prefix or suffix style — see _is_aggregate_label) is a
+        # sub-total/aggregate, not a holding: skip it. Some AMCs (UTI, Tata) never print an
+        # explicit "GRAND TOTAL" %-figure at all; the fallback below self-sums the real
+        # holdings instead of trying to guess which aggregate row is the true fund-level one.
         if label and _is_aggregate_label(label):
             continue
 

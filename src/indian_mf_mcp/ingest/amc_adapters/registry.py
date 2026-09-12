@@ -20,6 +20,7 @@ from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
 from indian_mf_mcp.ingest.amc_adapters.motilal_oswal import MotilalOswalAdapter
 from indian_mf_mcp.ingest.amc_adapters.ppfas import PPFASAdapter
 from indian_mf_mcp.ingest.amc_adapters.sbi import SBIAdapter
+from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
 from indian_mf_mcp.ingest.amc_adapters.uti import UTIAdapter
 
 
@@ -37,6 +38,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "uti": (UTIAdapter, None),
     "mirae": (MiraeAdapter, None),
     "motilal-oswal": (MotilalOswalAdapter, combined_workbook.find_sheet_code),
+    "tata": (TataAdapter, combined_workbook.find_sheet_code),
 }
 
 
