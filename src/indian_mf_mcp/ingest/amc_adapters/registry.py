@@ -26,6 +26,7 @@ from indian_mf_mcp.ingest.amc_adapters.ppfas import PPFASAdapter
 from indian_mf_mcp.ingest.amc_adapters.sbi import SBIAdapter
 from indian_mf_mcp.ingest.amc_adapters.sundaram import SundaramAdapter
 from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
+from indian_mf_mcp.ingest.amc_adapters.union import UnionAdapter
 from indian_mf_mcp.ingest.amc_adapters.uti import UTIAdapter
 
 
@@ -49,6 +50,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "franklin-templeton": (FranklinTempletonAdapter, combined_workbook.find_sheet_by_title),
     "baroda-bnp-paribas": (BarodaBNPParibasAdapter, combined_workbook.find_sheet_code),
     "sundaram": (SundaramAdapter, combined_workbook.find_sheet_code),
+    "union": (UnionAdapter, None),
 }
 
 
