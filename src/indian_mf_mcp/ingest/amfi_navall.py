@@ -15,7 +15,7 @@ import httpx
 
 from indian_mf_mcp import config
 from indian_mf_mcp.normalize.taxonomy import parse_plan_option, parse_plan_option_columns
-from indian_mf_mcp.parsers.delimited import NavRow, parse_navall
+from indian_mf_mcp.parsers.delimited import NavRow, parse_amfi_date, parse_navall
 from indian_mf_mcp.store import repository as repo
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -100,7 +100,7 @@ def ingest_rows(conn: sqlite3.Connection, rows: list[NavRow], as_of: date) -> di
         n_plans += 1
 
         if row.nav is not None and row.date:
-            nav_date = _parse_amfi_date(row.date)
+            nav_date = parse_amfi_date(row.date)
             if nav_date:
                 nav_batch.append((plan_id, nav_date, row.nav))
 
@@ -119,16 +119,6 @@ def ingest_rows(conn: sqlite3.Connection, rows: list[NavRow], as_of: date) -> di
 
     return {"amcs": len(seen_amcs), "schemes": len(seen_schemes), "plans": n_plans,
             "nav_points": len(nav_batch), "warnings": warnings}
-
-
-def _parse_amfi_date(date_str: str) -> str | None:
-    """AMFI dates look like '12-Sep-2026'."""
-    for fmt in ("%d-%b-%Y", "%d-%b-%y"):
-        try:
-            return datetime.strptime(date_str.strip(), fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
 
 
 def run_daily_ingest(conn: sqlite3.Connection, raw: bytes | None = None, as_of: date | None = None) -> dict:

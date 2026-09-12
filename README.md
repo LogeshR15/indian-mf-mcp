@@ -9,7 +9,22 @@ Not investment advice.
 
 ## Status
 
-- **Phase 1 (evidence spine):** AMFI NAVAll.txt ingest + `resolve_fund` + `get_fund_performance`.
+- **Phase 1 (evidence spine):** AMFI NAVAll.txt daily ingest, historical NAV backfill,
+  `resolve_fund`, and `get_fund_performance`.
+  - NAVAll.txt is a *one-day snapshot*, so it alone can only ever hold one NAV point per plan
+    and every return/risk metric stays uncomputable. `backfill-nav-history` fills the series
+    from AMFI's `DownloadNAVHistoryReport_Po.aspx`, which orders its columns differently from
+    NAVAll.txt — both are parsed by one column-header-driven parser rather than by field
+    position, so AMFI reordering or inserting columns does not silently corrupt the read.
+    All three scheme universes are fetched (`tp=1` open-ended, `2` close-ended, `3` interval).
+    Requests are chunked by calendar month (a 3-month range is ~74 MB), each completed month
+    is recorded in `ingest_run`, and NAV writes upsert on `(plan_id, date)` — so an
+    interrupted multi-year backfill resumes where it stopped rather than re-downloading
+    gigabytes, and a single failed month is recorded and skipped past instead of aborting the
+    run. Unlike NAVAll.txt the raw payloads are not archived: a decade is several GB and,
+    unlike the daily snapshot's point-in-time taxonomy, it stays re-derivable on demand.
+    Scheme codes not already known from the daily ingest are counted and skipped, never
+    turned into half-populated scheme rows.
 - **Phase 2 (portfolio spine):** live AMC portfolio XLSX parsing with 100%-reconciliation
   gating, ISIN-keyed change engine (corporate-action flagging, price/flow drift detection),
   holding persistence, concentration, and `get_fund_portfolio`.
@@ -84,6 +99,7 @@ Remaining AMC adapters, TER/manager extraction, and change monitoring (Phase 4) 
 ```
 uv sync
 uv run mf-mcp ingest-navall   # populate the local store with AMFI's daily NAV universe
+uv run mf-mcp backfill-nav-history --from 2016-01-01   # historical NAV; resumable, run once
 uv run mf-mcp backfill-portfolio --amc ppfas \
     --scheme-id <scheme_id from resolve_fund> \
     --scheme-hint "Parag Parikh Flexi Cap Fund" \

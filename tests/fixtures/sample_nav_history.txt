@@ -1,0 +1,16 @@
+Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date
+
+Open Ended Schemes ( Equity Scheme - Flexi Cap Fund )
+
+
+Parag Parikh Financial Advisory Services Private Limited
+122639;Parag Parikh Flexi Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF879O01027;-;90.7896;01-Sep-2026
+122639;Parag Parikh Flexi Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF879O01027;-;90.5023;02-Sep-2026
+122639;Parag Parikh Flexi Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF879O01027;-;90.6349;03-Sep-2026
+122640;Parag Parikh Flexi Cap Fund - Regular Plan - Growth;Regular Plan;Growth;INF879O01019;-;83.1102;01-Sep-2026
+
+Open Ended Schemes ( Money Market )
+
+
+Taurus Mutual Fund
+999999;Taurus Investor Education Pool - Unclaimed;;;;;10.0000;01-Sep-2026

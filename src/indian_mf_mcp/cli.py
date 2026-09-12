@@ -13,6 +13,16 @@ def main() -> None:
     sub.add_parser("serve", help="Run the MCP server (stdio transport)")
     sub.add_parser("ingest-navall", help="Fetch + archive + parse today's AMFI NAVAll.txt")
 
+    navhist = sub.add_parser("backfill-nav-history",
+                              help="Backfill historical NAV from AMFI (month by month, resumable)")
+    navhist.add_argument("--from", dest="since", required=True, help="YYYY-MM-DD")
+    navhist.add_argument("--to", dest="until", default=None,
+                          help="YYYY-MM-DD (default: today)")
+    navhist.add_argument("--universes", default="1,2,3",
+                          help="AMFI tp values: 1=open-ended, 2=close-ended, 3=interval")
+    navhist.add_argument("--force", action="store_true",
+                          help="Re-fetch months already recorded as ingested")
+
     backfill = sub.add_parser("backfill-portfolio", help="Backfill an AMC's portfolio disclosures")
     backfill.add_argument("--amc", required=True,
                            choices=["ppfas", "sbi", "uti", "mirae", "motilal-oswal", "tata",
@@ -36,6 +46,26 @@ def main() -> None:
 
         with connect() as conn:
             stats = run_daily_ingest(conn)
+        json.dump(stats, sys.stdout, indent=2)
+        print()
+        if stats.get("warnings"):
+            for warning in stats["warnings"]:
+                print(f"warning: {warning}", file=sys.stderr)
+            sys.exit(1)
+    elif args.command == "backfill-nav-history":
+        from datetime import date as _date
+
+        from indian_mf_mcp.ingest.amfi_nav_history import backfill_nav_history
+        from indian_mf_mcp.store.db import connect
+
+        start = _date.fromisoformat(args.since)
+        end = _date.fromisoformat(args.until) if args.until else _date.today()
+        universes = tuple(u.strip() for u in args.universes.split(",") if u.strip())
+        with connect() as conn:
+            stats = backfill_nav_history(
+                conn, start, end, universes=universes, force=args.force,
+                progress=lambda msg: print(msg, file=sys.stderr, flush=True),
+            )
         json.dump(stats, sys.stdout, indent=2)
         print()
         if stats.get("warnings"):

@@ -1,26 +1,35 @@
-"""Stateful parser for AMFI NAVAll.txt.
+"""Stateful parser for AMFI's semicolon-delimited NAV files.
 
-Format (verified against live file, 2026-09-12):
-  - Semicolon-delimited.
-  - Two column layouts exist in the wild and both are handled:
-      8-column (current): "Scheme Code;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;
-        Scheme Name;Plan;Option;Net Asset Value;Date"
-      6-column (legacy):  "Scheme Code;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;
-        Scheme Name;Net Asset Value;Date"
-    NAV and Date are always the last two fields; Plan/Option are present only in the 8-column
-    layout, and are blank there for discontinued plans AMFI never backfilled.
+Two AMFI endpoints share this shape but *not* their column order, so parsing is driven by the
+`Scheme Code;...` column-header line rather than by field position:
+
+  NAVAll.txt (daily snapshot, verified live 2026-09-12):
+    Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;
+    Net Asset Value;Date
+  DownloadNAVHistoryReport_Po.aspx (date range, verified live 2026-09-13):
+    Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;
+    Net Asset Value;Date
+
+A legacy 6-column NAVAll layout (no Plan/Option columns, plan and option embedded in the
+scheme name) is still parsed for archived files. Positional parsing is used only as a
+fallback for files with no column-header line at all.
+
+Other structural rules, common to both files:
   - Section headers carry taxonomy, e.g. "Open Ended Schemes(Equity Scheme - Mid Cap Fund)"
   - Blank lines separate AMC blocks; the first non-blank, non-header, non-column-header line
     after a blank is the AMC name (a bare line with no ';').
   - Everything else is a data row.
+  - Plan/Option are blank on discontinued plans AMFI never backfilled.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 _CATEGORY_RE = re.compile(r"^(.*?)\((.*)\)\s*$")
 _COLUMN_HEADER_PREFIX = "Scheme Code;"
+_WS_RE = re.compile(r"\s+")
 
 # Placeholders AMFI uses in the ISIN columns when there is no ISIN to report.
 _ISIN_SENTINELS = {"", "-", "n/a", "na", "redeemed"}
@@ -34,8 +43,8 @@ class NavRow:
     scheme_name: str
     nav: float | None
     date: str | None
-    plan_raw: str | None  # "Plan" column, 8-column layout only (None = column absent/blank)
-    option_raw: str | None  # "Option" column, 8-column layout only
+    plan_raw: str | None  # "Plan" column; None when absent from the layout or blank
+    option_raw: str | None  # "Option" column
     amc_name: str
     scheme_type: str  # e.g. "Open Ended Schemes"
     category: str  # e.g. "Equity Scheme"
@@ -43,8 +52,21 @@ class NavRow:
     raw_header_string: str  # the untouched section header line
 
 
-def _clean_isin(value: str) -> str | None:
-    text = value.strip()
+AMFI_DATE_FMT = "%d-%b-%Y"
+
+
+def parse_amfi_date(date_str: str | None) -> str | None:
+    """AMFI dates look like '12-Sep-2026'. Returns an ISO date, or None if unparseable."""
+    for fmt in (AMFI_DATE_FMT, "%d-%b-%y"):
+        try:
+            return datetime.strptime((date_str or "").strip(), fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _clean_isin(value: str | None) -> str | None:
+    text = (value or "").strip()
     return None if text.lower() in _ISIN_SENTINELS else text
 
 
@@ -63,11 +85,49 @@ def _split_category(header: str) -> tuple[str, str, str, str]:
     return scheme_type, category.strip(), sub_category.strip(), header
 
 
+def _parse_column_header(line: str) -> dict[str, int]:
+    """Map logical field -> column index, from the file's own header line.
+
+    Matching is on normalized column *names*, so AMFI reordering columns (as it did between
+    NAVAll.txt and the history report) costs nothing here.
+    """
+    mapping: dict[str, int] = {}
+    for idx, raw_name in enumerate(line.split(";")):
+        name = _WS_RE.sub(" ", raw_name).strip().lower()
+        if name == "scheme code":
+            mapping["scheme_code"] = idx
+        elif name in ("scheme name", "nav name"):
+            mapping["scheme_name"] = idx
+        elif name == "plan":
+            mapping["plan"] = idx
+        elif name == "option":
+            mapping["option"] = idx
+        elif name == "net asset value":
+            mapping["nav"] = idx
+        elif name == "date":
+            mapping["date"] = idx
+        elif "isin" in name:
+            # "ISIN Div Payout/ ISIN Growth" mentions payout AND growth, so test reinvestment
+            # first — it is the only unambiguous discriminator between the two ISIN columns.
+            if "reinvest" in name:
+                mapping["isin_reinvest"] = idx
+            else:
+                mapping["isin_payout"] = idx
+    return mapping
+
+
+# Field order of the legacy 6-column NAVAll layout, used only when a file has no header line.
+_POSITIONAL_FALLBACK = {
+    "scheme_code": 0, "isin_payout": 1, "isin_reinvest": 2, "scheme_name": 3,
+}
+
+
 def parse_navall(text: str) -> list[NavRow]:
     rows: list[NavRow] = []
     scheme_type = category = sub_category = raw_header = ""
     amc_name = ""
     expect_amc_name = False
+    columns: dict[str, int] = {}
 
     for raw_line in text.splitlines():
         line = raw_line.strip("\r\n")
@@ -78,7 +138,7 @@ def parse_navall(text: str) -> list[NavRow]:
             continue
 
         if stripped.startswith(_COLUMN_HEADER_PREFIX):
-            # column header row, not data
+            columns = _parse_column_header(stripped)
             continue
 
         if ";" not in stripped:
@@ -97,28 +157,31 @@ def parse_navall(text: str) -> list[NavRow]:
         fields = stripped.split(";")
         if len(fields) < 6:
             continue
-        scheme_code, isin_payout, isin_reinvest, scheme_name = fields[:4]
-        # NAV and Date are the last two fields in both the 6- and 8-column layouts.
-        nav_str, date_str = fields[-2], fields[-1]
-        if len(fields) >= 8:
-            plan_raw: str | None = fields[4].strip() or None
-            option_raw: str | None = fields[5].strip() or None
+
+        def field(key: str, default: str = "") -> str:
+            idx = columns.get(key, _POSITIONAL_FALLBACK.get(key, -1))
+            return fields[idx] if 0 <= idx < len(fields) else default
+
+        if columns:
+            nav_str, date_str = field("nav"), field("date")
         else:
-            plan_raw = option_raw = None
+            # Headerless file: NAV and Date are the last two fields in every known layout.
+            nav_str, date_str = fields[-2], fields[-1]
         try:
-            nav = float(nav_str)
+            nav: float | None = float(nav_str)
         except ValueError:
             nav = None
+
         rows.append(
             NavRow(
-                scheme_code=scheme_code.strip(),
-                isin_div_payout_or_growth=_clean_isin(isin_payout),
-                isin_div_reinvestment=_clean_isin(isin_reinvest),
-                scheme_name=scheme_name.strip(),
+                scheme_code=field("scheme_code").strip(),
+                isin_div_payout_or_growth=_clean_isin(field("isin_payout")),
+                isin_div_reinvestment=_clean_isin(field("isin_reinvest")),
+                scheme_name=field("scheme_name").strip(),
                 nav=nav,
                 date=(date_str.strip() or None),
-                plan_raw=plan_raw,
-                option_raw=option_raw,
+                plan_raw=(field("plan").strip() or None),
+                option_raw=(field("option").strip() or None),
                 amc_name=amc_name,
                 scheme_type=scheme_type,
                 category=category,
