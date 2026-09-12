@@ -1,0 +1,16 @@
+Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date
+
+Open Ended Schemes(Equity Scheme - Flexi Cap Fund)
+
+Parag Parikh Financial Advisory Services Private Limited
+122639;INF879O01027;-;Parag Parikh Flexi Cap Fund - Direct Plan - Growth;75.1234;10-Sep-2026
+122640;INF879O01019;-;Parag Parikh Flexi Cap Fund - Regular Plan - Growth;69.4321;10-Sep-2026
+
+HDFC Asset Management Company Limited
+101234;INF179K01158;-;HDFC Flexi Cap Fund - Direct Plan - Growth;1450.55;10-Sep-2026
+101235;INF179K01166;-;HDFC Flexi Cap Fund - Regular Plan - Growth;1390.12;10-Sep-2026
+
+Open Ended Schemes(Equity Scheme - Mid Cap Fund)
+
+Axis Asset Management Company Limited
+120503;INF846K01EW2;-;Axis Midcap Fund - Direct Plan - Growth;98.76;10-Sep-2026

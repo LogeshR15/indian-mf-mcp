@@ -1,0 +1,173 @@
+"""get_fund_portfolio: holdings, allocations, change detection. The heart of the differentiated
+value (spec §5.2) — requires per-AMC fetching, XLSX parsing, ISIN-keyed set arithmetic and
+corporate-action handling, none of which is Claude's job.
+"""
+from __future__ import annotations
+
+import sqlite3
+from datetime import date, timedelta
+
+from indian_mf_mcp.change_engine.concentration import concentration_stats
+from indian_mf_mcp.change_engine.persistence import compute_persistence
+from indian_mf_mcp.change_engine.portfolio_diff import diff_snapshots
+from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
+from indian_mf_mcp.store import portfolio_repository as prepo
+
+HISTORY_MONTHS = {"none": 0, "12M": 12, "36M": 36, "60M": 60}
+
+
+def _holdings_dicts(rows) -> list[dict]:
+    return [{
+        "isin": r["isin"], "instrument_name": r["instrument_name"],
+        "industry_or_rating": r["industry_or_rating"], "quantity": r["quantity"],
+        "market_value_lakhs": r["market_value_lakhs"], "pct_nav": r["pct_nav"],
+        "asset_class": r["asset_class"], "listed": bool(r["listed"]),
+        "section_label": r["section_label"],
+    } for r in rows]
+
+
+def _allocations(rows) -> dict:
+    by_sector: dict[str, float] = {}
+    by_asset_class: dict[str, float] = {}
+    cash_pct = 0.0
+    for r in rows:
+        pct = r["pct_nav"] or 0.0
+        ac = r["asset_class"] or "other"
+        by_asset_class[ac] = by_asset_class.get(ac, 0.0) + pct
+        if ac == "cash":
+            cash_pct += pct
+        elif r["industry_or_rating"]:
+            key = r["industry_or_rating"].strip()
+            if key:
+                by_sector[key] = by_sector.get(key, 0.0) + pct
+    return {
+        "by_sector": dict(sorted(by_sector.items(), key=lambda kv: kv[1], reverse=True)),
+        "by_asset_class": by_asset_class,
+        "cash_pct": cash_pct,
+        "market_cap": None,  # AMFI half-yearly cap-list join not yet implemented (Phase 2 gap)
+    }
+
+
+def get_fund_portfolio(
+    conn: sqlite3.Connection,
+    scheme_ids: list[str],
+    as_of: str = "latest",
+    compare_to: str | None = "prev_month",
+    history: str = "none",
+    sections: list[str] | None = None,
+    holdings_limit: int | None = None,
+    provenance: str = "compact",
+) -> dict:
+    sections = sections or ["holdings", "allocations", "changes", "concentration", "persistence"]
+    results = {}
+
+    for scheme_id in scheme_ids:
+        pb = ProvenanceBuilder()
+        as_of_date = None if as_of == "latest" else as_of
+        snapshot = prepo.get_latest_snapshot(conn, scheme_id, as_of=as_of_date)
+        if snapshot is None:
+            results[scheme_id] = {
+                "error": "no_portfolio_data",
+                "meta": {"scheme_id": scheme_id,
+                         "note": "No parsed portfolio snapshot available for this scheme yet. "
+                                 "This may mean the AMC adapter has not been run, not that the "
+                                 "fund has no disclosed holdings."},
+            }
+            continue
+
+        holdings_rows = prepo.get_holdings(conn, snapshot["snapshot_id"])
+        src_snap = pb.add_source(
+            type="amc_portfolio_disclosure", scheme_id=scheme_id,
+            as_of_date=snapshot["as_of_date"], doc_id=snapshot["source_doc_id"],
+            disclosure_type=snapshot["disclosure_type"],
+        )
+
+        meta = {
+            "scheme_id": scheme_id, "as_of_date": snapshot["as_of_date"],
+            "disclosure_type": snapshot["disclosure_type"],
+            "reconciliation_ok": bool(snapshot["reconciliation_ok"]),
+            "benchmark_name": snapshot["benchmark_name"],
+        }
+
+        if "holdings" in sections:
+            hd = _holdings_dicts(holdings_rows)
+            if holdings_limit:
+                hd = sorted(hd, key=lambda h: h["pct_nav"] or 0, reverse=True)[:holdings_limit]
+            pb.fact("holdings", hd, src_snap, "official")
+
+        if "allocations" in sections:
+            alloc = _allocations(holdings_rows)
+            calc = pb.add_calc(method="allocation_aggregation", inputs=[src_snap])
+            pb.fact("allocations", alloc, calc, "calculated",
+                    caveat="market_cap allocation requires the AMFI half-yearly cap list join, "
+                           "not yet implemented — reported as unavailable, not guessed.")
+
+        if "concentration" in sections:
+            equity_like_pcts = [h["pct_nav"] for h in holdings_rows
+                                 if h["asset_class"] in ("equity", "foreign", "reit") and h["pct_nav"]]
+            calc = pb.add_calc(method="concentration_hhi", inputs=[src_snap],
+                                params={"population": "equity_foreign_reit"})
+            pb.fact("concentration", concentration_stats(equity_like_pcts), calc, "calculated")
+
+        if "changes" in sections and compare_to:
+            if compare_to == "prev_month":
+                prev_snapshot = conn.execute(
+                    """SELECT * FROM portfolio_snapshot WHERE scheme_id = ? AND as_of_date < ?
+                       ORDER BY as_of_date DESC LIMIT 1""",
+                    (scheme_id, snapshot["as_of_date"]),
+                ).fetchone()
+            else:
+                prev_snapshot = prepo.get_latest_snapshot(conn, scheme_id, as_of=compare_to)
+
+            if prev_snapshot is None or prev_snapshot["snapshot_id"] == snapshot["snapshot_id"]:
+                pb.warn(f"No prior snapshot available to compare against for {scheme_id}; "
+                        "'changes' section omitted rather than fabricated.")
+            else:
+                prev_rows = prepo.get_holdings(conn, prev_snapshot["snapshot_id"])
+                change_rows = diff_snapshots(prev_rows, holdings_rows)
+                src_prev = pb.add_source(
+                    type="amc_portfolio_disclosure", scheme_id=scheme_id,
+                    as_of_date=prev_snapshot["as_of_date"], doc_id=prev_snapshot["source_doc_id"],
+                )
+                calc = pb.add_calc(method="isin_keyed_quantity_diff", inputs=[src_prev, src_snap])
+                pb.fact("changes", [
+                    {"isin": c.isin, "name": c.name, "action": c.action,
+                     "delta_qty": c.delta_qty, "delta_pct_nav": c.delta_pct_nav,
+                     "delta_value_lakhs": c.delta_value, "confidence": c.confidence,
+                     "flags": c.flags}
+                    for c in change_rows
+                ], calc, "observed" if not any(c.flags for c in change_rows) else "approximation",
+                   caveat="Quantity-based; corporate actions are flagged, not asserted as trades. "
+                          "PRICE_FLOW_DRIFT rows reflect price/inflow movement with no trade.")
+
+        if "persistence" in sections:
+            months = HISTORY_MONTHS.get(history, 0)
+            if months == 0:
+                pb.warn("persistence requested but history='none'; provide history=\"12M\"/"
+                        "\"36M\"/\"60M\" for a persistence table.")
+            else:
+                since_date = (date.fromisoformat(snapshot["as_of_date"])
+                              - timedelta(days=months * 31)).isoformat()
+                snaps = prepo.get_snapshots_for_scheme(conn, scheme_id, since=since_date)
+                snapshots_holdings = [
+                    (s["as_of_date"], prepo.get_holdings(conn, s["snapshot_id"])) for s in snaps
+                ]
+                persistence_rows = compute_persistence(snapshots_holdings)
+                calc = pb.add_calc(method="holding_persistence", params={"history": history},
+                                    inputs=[src_snap])
+                pb.fact("persistence", [
+                    {"isin": r.isin, "name": r.name, "months_held": r.months_held,
+                     "continuous_streak_current": r.continuous_streak_current,
+                     "avg_pct_nav": r.avg_pct_nav, "first_seen_date": r.first_seen_date,
+                     "last_seen_date": r.last_seen_date}
+                    for r in persistence_rows
+                ], calc, "observed",
+                   caveat=f"Coverage window is whatever snapshots are actually stored since "
+                          f"{since_date}; gaps in AMC disclosure are not interpolated.")
+                meta["persistence_coverage_start"] = snaps[0]["as_of_date"] if snaps else None
+                meta["persistence_coverage_end"] = snaps[-1]["as_of_date"] if snaps else None
+                meta["persistence_n_snapshots"] = len(snaps)
+
+        results[scheme_id] = pb.build(provenance=provenance, extra_meta=meta)
+
+    return results

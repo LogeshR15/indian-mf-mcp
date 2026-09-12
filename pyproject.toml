@@ -1,0 +1,31 @@
+[project]
+name = "indian-mf-mcp"
+version = "0.1.0"
+description = "MCP server providing normalized, provenance-tagged evidence on Indian mutual funds (NAV, portfolios, documents) for Claude to reason over."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.2.0,<2",
+  "httpx>=0.27",
+  "openpyxl>=3.1",
+  "xlrd>=2.0.1",
+  "pypdf>=4.0",
+  "pdfplumber>=0.11",
+  "selectolax>=0.3",
+]
+
+[project.scripts]
+mf-mcp = "indian_mf_mcp.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/indian_mf_mcp"]
+
+[dependency-groups]
+dev = [
+    "playwright>=1.62.0",
+    "pytest>=8.0",
+]
