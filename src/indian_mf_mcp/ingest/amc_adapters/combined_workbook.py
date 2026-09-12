@@ -46,7 +46,7 @@ def find_sheet_code(raw: bytes, scheme_hint: str, index_sheet_name: str = "Index
         texts = [str(c).strip().lower() if isinstance(c, str) else "" for c in row]
         nc = next((idx for idx, t in enumerate(texts) if "fund name" in t or "scheme name" in t), None)
         cc = next((idx for idx, t in enumerate(texts) if "fund code" in t or "scheme code" in t
-                    or "short code" in t), None)
+                    or "short code" in t or "short name" in t or "acronym" in t), None)
         if nc is not None and cc is not None:
             name_col, code_col, header_idx = nc, cc, i
             break

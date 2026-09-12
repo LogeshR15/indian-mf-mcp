@@ -154,7 +154,7 @@ def _find_main_header_row(rows: list[tuple]) -> tuple[int, ColumnMap] | None:
 
         name_col = find("name of the instrument", "name of instrument")
         isin_col = find("isin")
-        pct_col = find("% to net", "% to aum", "% to nav")
+        pct_col = find("% to net", "% to aum", "% to nav", "% of net")
         if name_col is None or isin_col is None or pct_col is None:
             continue
         industry_col = find("industry", "rating")
