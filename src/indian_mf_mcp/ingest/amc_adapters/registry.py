@@ -16,8 +16,11 @@ from typing import Callable
 import openpyxl
 
 from indian_mf_mcp.ingest.amc_adapters import combined_workbook
+from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
+from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTempletonAdapter
 from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
 from indian_mf_mcp.ingest.amc_adapters.motilal_oswal import MotilalOswalAdapter
+from indian_mf_mcp.ingest.amc_adapters.nippon import NipponAdapter
 from indian_mf_mcp.ingest.amc_adapters.ppfas import PPFASAdapter
 from indian_mf_mcp.ingest.amc_adapters.sbi import SBIAdapter
 from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
@@ -39,6 +42,9 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "mirae": (MiraeAdapter, None),
     "motilal-oswal": (MotilalOswalAdapter, combined_workbook.find_sheet_code),
     "tata": (TataAdapter, combined_workbook.find_sheet_code),
+    "nippon": (NipponAdapter, combined_workbook.find_sheet_code),
+    "dsp": (DSPAdapter, None),
+    "franklin-templeton": (FranklinTempletonAdapter, combined_workbook.find_sheet_by_title),
 }
 
 

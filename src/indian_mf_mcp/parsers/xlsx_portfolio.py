@@ -26,7 +26,8 @@ import openpyxl
 # "Certificate of Deposit") is treated as a sub-section label within the active top_section.
 TOP_LEVEL_SECTION_KEYWORDS = (
     "equity & equity related", "equity and equity related", "equity related instruments",
-    "money market instruments", "government securities", "derivatives", "others",
+    "money market instruments", "debt instruments", "government securities", "derivatives",
+    "others",
 )
 
 AGGREGATE_ROW_LABELS = {"sub total", "total", "grand total"}
@@ -116,7 +117,7 @@ def _asset_class_for(top_section: str, sub_section: str) -> str:
         return "reit"
     if "equity" in t:
         return "equity"
-    if "money market" in t:
+    if "money market" in t or "debt instruments" in t or "government securities" in t:
         return "debt"
     if "reverse repo" in s or "treps" in s:
         return "cash"
@@ -261,13 +262,23 @@ def parse_portfolio_xlsx(raw: bytes, sheet_name: str | None = None) -> Portfolio
 
     for row in rows[header_idx + 1:]:
         col_b = cell(row, cols.name)
-        col_c = cell(row, cols.isin)
+        col_c_raw = cell(row, cols.isin)
         col_d = cell(row, cols.industry)
         col_e = cell(row, cols.quantity)
         col_f = cell(row, cols.value)
         col_g = cell(row, cols.pct)
 
-        label = str(col_b).strip() if isinstance(col_b, str) else None
+        # Some AMCs (Franklin Templeton) put ISIN *before* the name column, and for
+        # section/total/summary rows the label text sits in that leading ISIN-column
+        # position instead of the name column (since there's no ISIN to put there) —
+        # fall back to whichever of the two actually holds text. When col_c is consumed
+        # as the label fallback, treat it as empty for ISIN/data-column purposes below —
+        # it was never a real ISIN, so it must not defeat the "no data columns populated"
+        # section-header check or get stored as a bogus ISIN on a fake holding.
+        label_from_name = str(col_b).strip() if isinstance(col_b, str) else None
+        used_isin_as_label = label_from_name is None and isinstance(col_c_raw, str)
+        label = label_from_name or (str(col_c_raw).strip() if used_isin_as_label else None)
+        col_c = None if used_isin_as_label else col_c_raw
 
         if label and any(label.lower().startswith(m) for m in FOOTER_STOP_MARKERS):
             break

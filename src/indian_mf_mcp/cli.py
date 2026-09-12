@@ -15,7 +15,8 @@ def main() -> None:
 
     backfill = sub.add_parser("backfill-portfolio", help="Backfill an AMC's portfolio disclosures")
     backfill.add_argument("--amc", required=True,
-                           choices=["ppfas", "sbi", "uti", "mirae", "motilal-oswal", "tata"],
+                           choices=["ppfas", "sbi", "uti", "mirae", "motilal-oswal", "tata",
+                                    "nippon", "dsp", "franklin-templeton"],
                            help="AMC adapter to use")
     backfill.add_argument("--scheme-id", required=True, help="scheme_id from resolve_fund")
     backfill.add_argument("--scheme-hint", required=True,
