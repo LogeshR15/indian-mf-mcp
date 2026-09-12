@@ -1,4 +1,4 @@
-from indian_mf_mcp.normalize.taxonomy import parse_plan_option
+from indian_mf_mcp.normalize.taxonomy import parse_plan_option, parse_plan_option_columns
 
 
 def test_direct_growth():
@@ -20,3 +20,30 @@ def test_same_base_name_for_all_plan_variants():
     a = parse_plan_option("Axis Midcap Fund - Direct Plan - Growth")
     b = parse_plan_option("Axis Midcap Fund - Regular Plan - Growth")
     assert a.base_scheme_name == b.base_scheme_name
+
+
+def test_plan_option_columns_direct_growth():
+    info = parse_plan_option_columns("Direct Plan", "Growth Option")
+    assert (info.plan_type, info.option_type, info.idcw_variant) == ("Direct", "Growth", None)
+
+
+def test_plan_option_columns_idcw_variants():
+    payout = parse_plan_option_columns("Regular Plan", "IDCW Payout Option")
+    assert (payout.plan_type, payout.option_type, payout.idcw_variant) == ("Regular", "IDCW", "Payout")
+
+    reinvest = parse_plan_option_columns("Direct Plan", "Monthly IDCW Reinvestment")
+    assert (reinvest.option_type, reinvest.idcw_variant) == ("IDCW", "Reinvest")
+
+    spelled_out = parse_plan_option_columns("Direct Plan", "Income Distribution cum capital withdrawal")
+    assert spelled_out.option_type == "IDCW"
+
+
+def test_plan_option_columns_blank_returns_none():
+    assert parse_plan_option_columns(None, None) is None
+    assert parse_plan_option_columns("", "  ") is None
+
+
+def test_plan_option_columns_unknown_option_is_none_not_guessed():
+    info = parse_plan_option_columns("Direct Plan", "Bonus Option")
+    assert info.plan_type == "Direct"
+    assert info.option_type is None

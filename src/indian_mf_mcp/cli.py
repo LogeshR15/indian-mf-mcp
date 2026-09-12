@@ -38,6 +38,10 @@ def main() -> None:
             stats = run_daily_ingest(conn)
         json.dump(stats, sys.stdout, indent=2)
         print()
+        if stats.get("warnings"):
+            for warning in stats["warnings"]:
+                print(f"warning: {warning}", file=sys.stderr)
+            sys.exit(1)
     elif args.command == "backfill-portfolio":
         from datetime import date as _date
 

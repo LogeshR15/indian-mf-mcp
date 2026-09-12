@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone
 import httpx
 
 from indian_mf_mcp import config
-from indian_mf_mcp.normalize.taxonomy import parse_plan_option
+from indian_mf_mcp.normalize.taxonomy import parse_plan_option, parse_plan_option_columns
 from indian_mf_mcp.parsers.delimited import NavRow, parse_navall
 from indian_mf_mcp.store import repository as repo
 
@@ -70,11 +70,19 @@ def ingest_rows(conn: sqlite3.Connection, rows: list[NavRow], as_of: date) -> di
             repo.upsert_amc(conn, amc_id, row.amc_name)
             seen_amcs.add(amc_id)
 
-        info = parse_plan_option(row.scheme_name)
-        scheme_id = scheme_id_for(row.amc_name, info.base_scheme_name)
+        # Prefer AMFI's dedicated Plan/Option columns; fall back to the name-embedded tokens
+        # (legacy layout, and rows where AMFI left the new columns blank).
+        from_columns = parse_plan_option_columns(row.plan_raw, row.option_raw)
+        if from_columns is not None:
+            info = from_columns
+            base_scheme_name = row.scheme_name
+        else:
+            info = parse_plan_option(row.scheme_name)
+            base_scheme_name = info.base_scheme_name
+        scheme_id = scheme_id_for(row.amc_name, base_scheme_name)
         if scheme_id not in seen_schemes:
             repo.upsert_scheme(
-                conn, scheme_id, amc_id, info.base_scheme_name,
+                conn, scheme_id, amc_id, base_scheme_name,
                 row.scheme_type, row.category, row.sub_category, as_of_str,
             )
             repo.insert_taxonomy_history(
@@ -100,8 +108,17 @@ def ingest_rows(conn: sqlite3.Connection, rows: list[NavRow], as_of: date) -> di
         repo.insert_nav_points(conn, nav_batch)
     repo.mark_inactive_plans_not_seen_since(conn, as_of_str)
 
+    warnings: list[str] = []
+    if n_plans and not nav_batch:
+        # Every row failing NAV/date extraction means AMFI changed the file layout again.
+        # Never let that pass as a silent success: the ingest "worked" but stored no NAVs.
+        warnings.append(
+            f"parsed {n_plans} plan rows but extracted 0 NAV points — "
+            "AMFI's NAVAll.txt layout has likely changed; check parsers/delimited.py"
+        )
+
     return {"amcs": len(seen_amcs), "schemes": len(seen_schemes), "plans": n_plans,
-            "nav_points": len(nav_batch)}
+            "nav_points": len(nav_batch), "warnings": warnings}
 
 
 def _parse_amfi_date(date_str: str) -> str | None:
