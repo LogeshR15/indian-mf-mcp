@@ -21,6 +21,7 @@ from indian_mf_mcp.ingest.amc_adapters.bank_of_india import BankOfIndiaAdapter
 from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPParibasAdapter
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
 from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTempletonAdapter
+from indian_mf_mcp.ingest.amc_adapters.groww import GrowwAdapter
 from indian_mf_mcp.ingest.amc_adapters.hdfc import HDFCAdapter
 from indian_mf_mcp.ingest.amc_adapters.icici_prudential import ICICIPrudentialAdapter
 from indian_mf_mcp.ingest.amc_adapters.kotak import KotakAdapter
@@ -83,6 +84,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     # "scheme name" substring test misses; it carries its own resolver instead.
     "quantum": (QuantumAdapter, _quantum_sheet_resolver),
     "360-one": (ThreeSixtyOneAdapter, combined_workbook.find_sheet_by_title),
+    "groww": (GrowwAdapter, combined_workbook.find_sheet_by_title),
 }
 
 

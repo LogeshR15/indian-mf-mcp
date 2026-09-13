@@ -255,6 +255,20 @@ every entry below as a snapshot of one investigation, not a settled fact.
     2020 and earlier is genuine legacy BIFF `.xls`, correctly skipped as `skipped_format`.
     **Real capability limit: usable history through this pipeline starts 2021**, even though
     the listing advertises back to 2018.
+  - **Groww** (formerly Indiabulls MF — the rebrand is still visible in its sheet codes, `IB01`,
+    `IB02`, ...) is Next.js pages-router SSR: the entire statutory-disclosure archive, every
+    category and financial year, is embedded in `__NEXT_DATA__` and comes back from one plain
+    GET. History is a folder tree (`Portfolio` → one folder per Indian financial year,
+    2022-2023 onward), so no per-month iteration. Files sit on a separate CDN host
+    (`assets-netstorage.growwmf.in`), and each file's `publicUrl` is handed over verbatim and
+    correctly percent-encoded, so nothing needs computing. **The notable quirk is that Groww's
+    filenames contain real, repeated typos** — "Montlhy", "Fortnighlty", "Forthnightly",
+    "Fotnightly" — so the adapter classifies monthly-vs-fortnightly by Levenshtein distance
+    against the two reference words rather than by substring match, which also covers typos not
+    yet observed. Date parsing is likewise format-tolerant, but deliberately only reads year and
+    month: a monthly portfolio is a month-end by regulation, so the day is computed with
+    `calendar.monthrange` rather than trusted from inconsistent filename text. Coverage starts
+    March 2023 (its first post-rebrand disclosure); pre-2024 files are legacy `.xls` and skipped.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
