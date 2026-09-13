@@ -78,10 +78,11 @@ Not investment advice.
     Prudential** (F5 BIG-IP WAF, TLS-fingerprint-based), **Invesco** and **WhiteOak Capital**
     (CloudFront/AWS-WAF on the whole domain — Invesco's India business may also have been
     rebranded, making this one possibly moot), and **Edelweiss** (Akamai edge WAF blocking
-    its portfolio API specifically) are each blocked by a commercial WAF vendor. **Axis** and
-    **PGIM India** are both cases where the real API is same-origin but only reachable after
-    client-side JS execution the site fingerprints and blocks in Playwright specifically — a
-    different failure mode from a WAF blocking the API itself. **HSBC** has no discoverable
+    its portfolio API specifically) are each blocked by a commercial WAF vendor. **PGIM India** is a case where the real API is
+    same-origin but only reachable after client-side JS execution the site fingerprints and
+    blocks in Playwright specifically — a different failure mode from a WAF blocking the API
+    itself. (**Axis** was listed here too and is now live: the browser route it was judged on
+    was never necessary — see below.) **HSBC** has no discoverable
     disclosure page at all. **Three AMCs — Bandhan, JM Financial, and Mahindra Manulife —
     share a distinct and notable failure mode**: their APIs return a real `200 OK` with a
     `{"data"/"payload": "<base64>"}` body that decodes to high-entropy ciphertext, not JSON —
@@ -164,6 +165,20 @@ Not investment advice.
     spaces — so matching is deliberately loose. The two oldest files (Nov/Dec 2023) predate
     Zerodha's per-scheme split and are combined workbooks with no scheme-code prefix; the
     adapter returns them only when no `scheme_hint` filter is given.
+  - **Axis is live, and its blocked entry was measuring the wrong thing.** It was judged on a
+    browser-automation route that turned out to be unnecessary: the document listing is a plain
+    JSON API on `www.axismf.com` itself, callable with `httpx` and the honest User-Agent, so
+    the Playwright fingerprinting that stopped the previous attempt never had to be involved.
+    `POST /cms/token` with `{}` yields a bearer token with no login; `POST
+    /cms/get-scheme-documents` with `{"sdType":"yearMonthSchemeDocs","sdID":"sdMonthSchemePortfolio"}`
+    returns scheme categories, years and months, and re-posting with `year`/`month`/`schemeCode`
+    returns a same-origin `.xlsx` URL under the key `docuementURL` (the AMC's own typo, matched
+    verbatim). **The generalizable find:** Axis's own bundled JS sets
+    `API_ENCRYPTION_STATUS_CMS: "none"` for `/cms/*` while its transactional API is set to
+    `"enable"` — i.e. an AMC can run a plaintext CMS tier *alongside* an encrypted one. Worth
+    checking such a flag in bundled JS before concluding an AMC's payloads are encrypted, which
+    is precisely the verdict currently standing against Bandhan, JM Financial and Mahindra
+    Manulife.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially

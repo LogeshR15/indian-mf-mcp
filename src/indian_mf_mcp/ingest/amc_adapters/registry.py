@@ -16,6 +16,7 @@ from typing import Callable
 import openpyxl
 
 from indian_mf_mcp.ingest.amc_adapters import combined_workbook
+from indian_mf_mcp.ingest.amc_adapters.axis import AxisAdapter
 from indian_mf_mcp.ingest.amc_adapters.bank_of_india import BankOfIndiaAdapter
 from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPParibasAdapter
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
@@ -66,6 +67,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "quant": (QuantAdapter, _quant_sheet_resolver),
     "navi": (NaviAdapter, None),
     "zerodha": (ZerodhaAdapter, None),
+    "axis": (AxisAdapter, None),
 }
 
 
