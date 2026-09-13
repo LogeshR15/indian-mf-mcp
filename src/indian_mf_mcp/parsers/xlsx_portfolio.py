@@ -94,6 +94,12 @@ def _num(v):
     return None
 
 
+def _is_blank(value) -> bool:
+    """Empty for header-detection purposes. Some AMCs (ICICI Prudential) leave unused ISIN /
+    industry / quantity cells as an empty string rather than None."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 _TOTAL_WORD_RE = re.compile(r"\btotal\b", re.IGNORECASE)
 
 
@@ -152,7 +158,7 @@ def _find_main_header_row(rows: list[tuple]) -> tuple[int, ColumnMap] | None:
                     return idx
             return None
 
-        name_col = find("name of the instrument", "name of instrument")
+        name_col = find("name of the instrument", "name of instrument", "instrument name")
         isin_col = find("isin")
         pct_col = find("% to net", "% to aum", "% to nav", "% of net")
         if name_col is None or isin_col is None or pct_col is None:
@@ -334,8 +340,18 @@ def parse_portfolio_xlsx(raw: bytes, sheet_name: str | None = None) -> Portfolio
         # data columns are populated — some AMCs (e.g. UTI's "NET CURRENT ASSETS") report a
         # standalone cash/other line with a real value+pct but no ISIN/industry/quantity;
         # treating that as a header would silently drop it from holdings and reconciliation.
-        if label and col_c is None and col_d is None and col_e is None and col_f is None and col_g is None:
-            if any(kw in label.strip().lower() for kw in TOP_LEVEL_SECTION_KEYWORDS):
+        no_identity_data = _is_blank(col_c) and _is_blank(col_d) and _is_blank(col_e)
+        looks_like_top_level = bool(label) and any(
+            kw in label.strip().lower() for kw in TOP_LEVEL_SECTION_KEYWORDS
+        )
+        # A named top-level section stays a section even when it also carries its own
+        # aggregate value/pct on the same row (ICICI Prudential does this). Anything else
+        # still needs every data column empty, which is what keeps a standalone valued line
+        # like UTI's "NET CURRENT ASSETS" classified as a holding rather than a header.
+        if label and no_identity_data and (
+            looks_like_top_level or (col_f is None and col_g is None)
+        ):
+            if looks_like_top_level:
                 top_section = label
                 sub_section = ""
             else:

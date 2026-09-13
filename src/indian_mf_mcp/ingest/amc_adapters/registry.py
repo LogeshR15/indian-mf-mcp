@@ -22,6 +22,7 @@ from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPPariba
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
 from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTempletonAdapter
 from indian_mf_mcp.ingest.amc_adapters.hdfc import HDFCAdapter
+from indian_mf_mcp.ingest.amc_adapters.icici_prudential import ICICIPrudentialAdapter
 from indian_mf_mcp.ingest.amc_adapters.kotak import KotakAdapter
 from indian_mf_mcp.ingest.amc_adapters.lic import LicAdapter
 from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
@@ -72,6 +73,9 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     # per scheme, so it needs no sheet_resolver despite publishing a combined file.
     "axis": (AxisAdapter, None),
     "kotak": (KotakAdapter, None),
+    # ICICI publishes one ZIP per month; fetch() extracts the scheme's member,
+    # so no sheet_resolver is involved.
+    "icici-prudential": (ICICIPrudentialAdapter, None),
 }
 
 
