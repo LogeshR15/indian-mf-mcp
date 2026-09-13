@@ -137,6 +137,22 @@ Not investment advice.
     unique so far among combined-workbook AMCs: neither shared resolver fits
     (`find_sheet_code` needs an Index sheet, `find_sheet_by_title` reads row 1), so the adapter
     carries its own small row-2 variant rather than bending the shared helper for one AMC.
+  - **Navi** is a WordPress/Elementor page whose REST endpoint
+    (`POST /wp-json/nv/v1/documents`, `category=884` for Monthly Portfolio) is spelled out in
+    the theme's own static `app.js` — again no browser needed. Three quirks: it requires a
+    `WP-NONCE` header that is genuinely enforced (omitting it 403s) but is WordPress's standard
+    *anonymous* nonce — identical for every visitor and openly embedded in the page's inline
+    `navi_property` variable, so the adapter scrapes it once per discovery call and reuses it;
+    the endpoint has no bulk-list mode (`financial_year` and full month name are both
+    mandatory), so history means one POST per calendar month; and files are served from two
+    different hosts by era (`public-assets.prod.navi-tech.in` recent,
+    `public-navi-docs.s3.ap-south-1.amazonaws.com` older) where a 2022-2024 range of URLs carry
+    **no file extension at all** despite serving correct XLSX content-types. The adapter
+    therefore never filters on extension, deferring to the shared content sniff — a filter that
+    looked obviously safe for every other AMC would have silently dropped three years of Navi
+    files. Pre-2021 months publish one combined legacy `.xls` per AMC rather than per-scheme
+    workbooks; those are surfaced and then skipped by the existing `skipped_format` path rather
+    than dropped at discovery, so the gap is visible instead of invisible.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
