@@ -26,6 +26,8 @@ from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
 from indian_mf_mcp.ingest.amc_adapters.motilal_oswal import MotilalOswalAdapter
 from indian_mf_mcp.ingest.amc_adapters.nippon import NipponAdapter
 from indian_mf_mcp.ingest.amc_adapters.ppfas import PPFASAdapter
+from indian_mf_mcp.ingest.amc_adapters.quant import QuantAdapter
+from indian_mf_mcp.ingest.amc_adapters.quant import _resolve_sheet as _quant_sheet_resolver
 from indian_mf_mcp.ingest.amc_adapters.sbi import SBIAdapter
 from indian_mf_mcp.ingest.amc_adapters.sundaram import SundaramAdapter
 from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
@@ -59,6 +61,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "taurus": (TaurusAdapter, None),
     "bank-of-india": (BankOfIndiaAdapter, combined_workbook.find_sheet_code),
     "hdfc": (HDFCAdapter, None),
+    "quant": (QuantAdapter, _quant_sheet_resolver),
 }
 
 

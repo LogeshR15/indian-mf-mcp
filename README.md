@@ -90,9 +90,12 @@ Not investment advice.
     crypto scheme, a fundamentally different and more invasive problem than a WAF bypass, and
     explicitly out of scope. The repetition across three unrelated AMCs suggests a shared
     fintech backend vendor for investor-portal APIs — worth checking before investing more
-    time on any AMC that returns this same opaque-payload shape. **Quant**'s self-service
-    disclosure page appears to be simply broken (empty ASP.NET WebForms viewstate, zero
-    backing requests fire) rather than protected. **Canara Robeco**'s file discovery actually
+    time on any AMC that returns this same opaque-payload shape. **quant is now live** — its
+    blocked entry was wrong twice over: the "broken" page (empty ASP.NET WebForms viewstate,
+    zero backing requests) was a *different* page from the one AMFI actually registers, and
+    that registered page, `quantmutual.com/statutory-disclosures`, serves a clean `200` with
+    the whole accordion rendered server-side. What made it look dead is that the MONTHLY
+    PORTFOLIO section renders empty until a year tab is clicked. See below. **Canara Robeco**'s file discovery actually
     *works* cleanly (static links, exact 100% reconciliation, zero parser changes) — but its
     WAF blocks the project's honest User-Agent while accepting a spoofed browser UA; asked
     the user explicitly rather than deciding unilaterally, and **the decision was to skip
@@ -122,6 +125,18 @@ Not investment advice.
     portal, but the portal and the file host are often separate infrastructure with separate
     rules. The remaining entries on this blocked list were all judged on their portals, and
     none has yet been re-tested for an independently-reachable file host.**
+  - **quant** is driven by a classic ASP.NET WebForms *PageMethod* —
+    `POST /statutorydisclosures.aspx/displaydisclouser` with `{"id": "<year>", "cat": "MONTHLY
+    PORTFOLIO"}`, returning `{"d": "<ul>...</ul>"}`, one `<li><a>` per month. Despite being
+    WebForms it needs no cookies, viewstate or session at all, and history comes from looping
+    the `id` param over years (verified live back to 2018). Its filenames are hand-uploaded and
+    carry **no date convention whatsoever**, so as-of dates must be parsed from each entry's
+    anchor *text* ("December 2023"), never from the URL — the exact inverse of HDFC, where the
+    URL is the only reliable source. Its combined workbook also has no Index sheet and puts the
+    constant literal "quant Mutual Fund" in row 1 with the real scheme name in **row 2**,
+    unique so far among combined-workbook AMCs: neither shared resolver fits
+    (`find_sheet_code` needs an Index sheet, `find_sheet_by_title` reads row 1), so the adapter
+    carries its own small row-2 variant rather than bending the shared helper for one AMC.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
