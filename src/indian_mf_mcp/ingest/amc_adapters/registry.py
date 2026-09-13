@@ -32,6 +32,8 @@ from indian_mf_mcp.ingest.amc_adapters.nippon import NipponAdapter
 from indian_mf_mcp.ingest.amc_adapters.ppfas import PPFASAdapter
 from indian_mf_mcp.ingest.amc_adapters.quant import QuantAdapter
 from indian_mf_mcp.ingest.amc_adapters.quant import _resolve_sheet as _quant_sheet_resolver
+from indian_mf_mcp.ingest.amc_adapters.quantum import QuantumAdapter
+from indian_mf_mcp.ingest.amc_adapters.quantum import _resolve_sheet as _quantum_sheet_resolver
 from indian_mf_mcp.ingest.amc_adapters.sbi import SBIAdapter
 from indian_mf_mcp.ingest.amc_adapters.sundaram import SundaramAdapter
 from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
@@ -76,6 +78,9 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     # ICICI publishes one ZIP per month; fetch() extracts the scheme's member,
     # so no sheet_resolver is involved.
     "icici-prudential": (ICICIPrudentialAdapter, None),
+    # Quantum's Index sheet says "Scheme Full Name", which the shared resolver's
+    # "scheme name" substring test misses; it carries its own resolver instead.
+    "quantum": (QuantumAdapter, _quantum_sheet_resolver),
 }
 
 

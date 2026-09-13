@@ -220,6 +220,23 @@ every entry below as a snapshot of one investigation, not a settled fact.
     **one ZIP containing every scheme's xlsx**, so `fetch()` downloads and extracts the member
     matching the scheme. Coverage starts January 2025, matching the site's own displayed
     history. This is the only AMC to date that required a *shared*-parser change (see below).
+  - **Quantum** (quantumamc.com — not to be confused with *quant* Mutual Fund) is plain
+    server-rendered HTML with no SPA, no JS literal and no JSON endpoint. The cheapest source of
+    each file URL turned out to be the analytics call attached to every download link —
+    `onclick="GTMcodeforxml(url, page, title, subtitle)"` — which carries both the file URL and
+    a human-readable title, scraped with one regex. File URLs are opaque UUIDs under
+    `/FileCDN/FactSheet/<uuid>.xlsx` with **no date embedded**, so the as-of date is recoverable
+    only from the anchor's own title text ("August 2026 - All Funds") — the same
+    date-from-text-not-URL situation as quant. **History lever:** the registered URL's numeric
+    path segments are a real server-side filter,
+    `/portfolio/combined/{scheme_id}/{portfolio_type}/{year}/{month}` (scheme_id `-1` = all
+    funds, portfolio_type `1` = monthly). AMFI registers the `year=0,month=0` default, which
+    returns only the last ~20 months; requesting an explicit `{year}` with `month=0` returns
+    every month published that year, verified 2015-2026 (2011/2012 return nothing — coverage
+    starts mid-2015). Had the default URL been taken at face value, this adapter would have
+    shipped with a two-year window instead of a decade. Its Index sheet reads "Scheme Full
+    Name", which the shared resolver's `"scheme name"` substring test misses because "full"
+    breaks contiguity; handled with a local resolver rather than loosening the shared helper.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
