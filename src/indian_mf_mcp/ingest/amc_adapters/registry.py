@@ -35,6 +35,7 @@ from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
 from indian_mf_mcp.ingest.amc_adapters.taurus import TaurusAdapter
 from indian_mf_mcp.ingest.amc_adapters.union import UnionAdapter
 from indian_mf_mcp.ingest.amc_adapters.uti import UTIAdapter
+from indian_mf_mcp.ingest.amc_adapters.zerodha import ZerodhaAdapter
 
 
 def _sbi_sheet_resolver(raw: bytes, scheme_hint: str) -> str | None:
@@ -64,6 +65,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "hdfc": (HDFCAdapter, None),
     "quant": (QuantAdapter, _quant_sheet_resolver),
     "navi": (NaviAdapter, None),
+    "zerodha": (ZerodhaAdapter, None),
 }
 
 

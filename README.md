@@ -153,6 +153,17 @@ Not investment advice.
     files. Pre-2021 months publish one combined legacy `.xls` per AMC rather than per-scheme
     workbooks; those are surfaced and then skipped by the existing `skipped_format` path rather
     than dropped at discovery, so the gap is visible instead of invisible.
+  - **Zerodha** is a Next.js page but server-side-rendered, so the entire archive — 360
+    monthly files, Nov 2023 to Aug 2026 — arrives embedded as JSON in `__NEXT_DATA__` on one
+    plain GET; "history" needs no pagination or query params at all, just filtering what is
+    already in hand. The same blob carries the scheme-code map (`ZNFTY` = "Zerodha Nifty 50
+    Index Fund"), which the adapter needs because filenames use short codes, not names. Files
+    live on a separate `assets.zerodhafundhouse.com` host, fetchable with the honest UA. Its
+    filenames are hand-inconsistent in three separate ways — dash spacing (`ZNFTY - Monthly`
+    vs `ZEN50- Monthly`), month spelling (`August 2026`, `Aug 2025`, `Sept 2025`) and double
+    spaces — so matching is deliberately loose. The two oldest files (Nov/Dec 2023) predate
+    Zerodha's per-scheme split and are combined workbooks with no scheme-code prefix; the
+    adapter returns them only when no `scheme_hint` filter is given.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
