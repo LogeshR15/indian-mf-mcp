@@ -1,4 +1,4 @@
-"""MCP server entrypoint. Phase 1: resolve_fund + get_fund_performance only."""
+"""MCP server entrypoint — Phase 1+2+3 tools."""
 from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
@@ -8,6 +8,7 @@ from indian_mf_mcp.tools.get_document import get_document as _get_document
 from indian_mf_mcp.tools.get_fund_performance import get_fund_performance as _get_fund_performance
 from indian_mf_mcp.tools.get_fund_portfolio import get_fund_portfolio as _get_fund_portfolio
 from indian_mf_mcp.tools.get_fund_profile import get_fund_profile as _get_fund_profile
+from indian_mf_mcp.tools.list_disclosure_events import list_disclosure_events as _list_disclosure_events
 from indian_mf_mcp.tools.resolve_fund import resolve_fund as _resolve_fund
 
 mcp = FastMCP(
@@ -130,6 +131,34 @@ def get_document(
         return _get_document(
             conn, doc_id=doc_id, scheme_id=scheme_id, doc_type=doc_type, as_of=as_of,
             query=query, sections=sections, max_chars=max_chars, return_=return_,
+        )
+
+
+@mcp.tool()
+def list_disclosure_events(
+    scheme_ids: list[str],
+    event_types: list[str] | None = None,
+    since: str | None = None,
+    provenance: str = "compact",
+) -> dict:
+    """Detected disclosure change events: manager changes, TER changes, benchmark changes, etc.
+
+    Returns ChangeEvents recorded during factsheet ingestion, newest-first.
+    Also includes a manager_timeline summary for each scheme.
+
+    event_types: any of "manager_change","ter_change","benchmark_change",
+                 "category_change","mandate_revision","addendum". Default: all.
+    since: ISO date string — only events detected on/after this date.
+
+    Events with confidence='observed' are derived by diffing consecutive factsheets —
+    the effective_date may differ from detected_date, and the exact change is inferred.
+    Only events with confidence='official' (addendum-sourced) are legally authoritative.
+    Requires factsheets to have been ingested via `mf-mcp ingest-factsheet` or
+    `mf-mcp backfill-factsheets`.
+    """
+    with connect() as conn:
+        return _list_disclosure_events(
+            conn, scheme_ids, event_types=event_types, since=since, provenance=provenance,
         )
 
 

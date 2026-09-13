@@ -12,6 +12,7 @@ from indian_mf_mcp.analytics import cost as cost_mod
 from indian_mf_mcp.analytics.returns import from_rows
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
 from indian_mf_mcp.store import repository as repo
+from indian_mf_mcp.store import manager_repository as mrep
 
 DEFAULT_SECTIONS = ["identity", "mandate", "benchmark", "costs", "managers", "documents"]
 
@@ -91,10 +92,43 @@ def _benchmark(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
 def _costs(pb: ProvenanceBuilder, conn, scheme_id: str, plans) -> None:
     direct = next((p for p in plans if p["plan_type"] == "Direct" and p["option_type"] == "Growth"), None)
     regular = next((p for p in plans if p["plan_type"] == "Regular" and p["option_type"] == "Growth"), None)
-    pb.fact("ter_direct", None, pb.add_source(type="not_implemented"), "official",
-            caveat="AMFI's TER page is SPA-only; per-AMC TER capture not yet implemented (Phase 3+).")
-    pb.fact("ter_regular", None, pb.add_source(type="not_implemented"), "official",
-            caveat="Same as ter_direct.")
+
+    # Stated TER — read from ter_history if available (populated by factsheet ingest)
+    if direct:
+        ter_row = mrep.get_latest_ter(conn, direct["plan_id"])
+        if ter_row:
+            src = pb.add_source(
+                type=ter_row["source"], plan_id=direct["plan_id"],
+                as_of_date=ter_row["as_of_date"],
+                doc_id=ter_row["source_doc_id"],
+            )
+            pb.fact("ter_direct", ter_row["ter_pct"], src, "official",
+                    caveat=f"As of {ter_row['as_of_date']}; source: {ter_row['source']}.")
+        else:
+            pb.fact("ter_direct", None, pb.add_source(type="not_yet_ingested"), "official",
+                    caveat="No TER record found. Run `mf-mcp ingest-factsheet` to populate.")
+    else:
+        pb.fact("ter_direct", None, pb.add_source(type="no_direct_growth_plan"), "official",
+                caveat="No Direct/Growth plan found for this scheme.")
+
+    if regular:
+        ter_row = mrep.get_latest_ter(conn, regular["plan_id"])
+        if ter_row:
+            src = pb.add_source(
+                type=ter_row["source"], plan_id=regular["plan_id"],
+                as_of_date=ter_row["as_of_date"],
+                doc_id=ter_row["source_doc_id"],
+            )
+            pb.fact("ter_regular", ter_row["ter_pct"], src, "official",
+                    caveat=f"As of {ter_row['as_of_date']}; source: {ter_row['source']}.")
+        else:
+            pb.fact("ter_regular", None, pb.add_source(type="not_yet_ingested"), "official",
+                    caveat="No TER record found. Run `mf-mcp ingest-factsheet` to populate.")
+    else:
+        pb.fact("ter_regular", None, pb.add_source(type="no_regular_growth_plan"), "official",
+                caveat="No Regular/Growth plan found for this scheme.")
+
+    # Realised spread — always computable from NAV series (spec §3.8)
     if direct and regular:
         d_series = from_rows(repo.get_nav_series(conn, direct["plan_id"]))
         r_series = from_rows(repo.get_nav_series(conn, regular["plan_id"]))
@@ -109,9 +143,56 @@ def _costs(pb: ProvenanceBuilder, conn, scheme_id: str, plans) -> None:
                 "Direct/Regular Growth plans not found for this scheme.")
 
 
-def _managers(pb: ProvenanceBuilder) -> None:
-    pb.warn("Manager identity/tenure requires factsheet extraction, not yet implemented "
-            "(spec Phase 3 continuation). Not fabricated.")
+def _managers(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
+    """Phase 3: Read manager assignments from the manager_assignment table.
+    Falls back to an honest warning if no factsheets have been ingested yet."""
+    assignments = mrep.get_current_managers_for_scheme(conn, scheme_id)
+    if not assignments:
+        # Check if we have ANY factsheets in the store for this scheme
+        factsheet_count = conn.execute(
+            "SELECT COUNT(*) FROM document WHERE scheme_id = ? AND doc_type = 'FACTSHEET'",
+            (scheme_id,),
+        ).fetchone()[0]
+        if factsheet_count == 0:
+            pb.warn(
+                f"No factsheets ingested for {scheme_id}; manager data unavailable. "
+                "Run `mf-mcp ingest-factsheet --scheme-id <id> --url <factsheet_url>` "
+                "or `mf-mcp backfill-factsheets --amc <amc> --scheme-id <id> --from <date>` "
+                "to populate manager history. Not fabricated."
+            )
+        else:
+            pb.warn(
+                f"{factsheet_count} factsheet(s) ingested but no current manager assignments "
+                f"found for {scheme_id}. Manager extraction may have failed on these documents "
+                "(check parse_confidence); or all assignments have a to_date set."
+            )
+        pb.fact("managers", [], pb.add_source(type="manager_assignment_table", scheme_id=scheme_id),
+                "observed")
+        return
+
+    # Gather all historical assignments too for context
+    all_assignments = mrep.get_managers_for_scheme(conn, scheme_id)
+    src = pb.add_source(
+        type="factsheet_derived_manager_assignments", scheme_id=scheme_id,
+        n_factsheets=conn.execute(
+            "SELECT COUNT(*) FROM document WHERE scheme_id = ? AND doc_type = 'FACTSHEET'",
+            (scheme_id,),
+        ).fetchone()[0],
+    )
+    pb.fact("managers", [
+        {
+            "name": r["name_normalised"],
+            "managing_since": r["from_date"],
+            "to_date": r["to_date"],
+            "confidence": r["confidence"],
+            "evidence_doc_id": r["evidence_doc_id"],
+            "current": r["to_date"] is None,
+        }
+        for r in all_assignments
+    ], src, "observed",
+    caveat="Derived by extracting manager names from ingested factsheets and diffing across "
+           "months. 'managing_since' is the earliest factsheet date where the manager appears. "
+           "Confidence='official' only for addendum-sourced changes; 'observed' otherwise.")
 
 
 def _documents(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
@@ -154,7 +235,7 @@ def get_fund_profile(
         if "costs" in sections:
             _costs(pb, conn, scheme_id, plans)
         if "managers" in sections:
-            _managers(pb)
+            _managers(pb, conn, scheme_id)
         if "documents" in sections:
             _documents(pb, conn, scheme_id)
 

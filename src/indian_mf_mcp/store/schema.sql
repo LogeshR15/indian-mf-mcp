@@ -150,3 +150,57 @@ CREATE TABLE IF NOT EXISTS ingest_run (
     status TEXT,
     detail_json TEXT
 );
+
+-- Phase 3: Manager identity and assignment history
+CREATE TABLE IF NOT EXISTS manager (
+    manager_id TEXT PRIMARY KEY,
+    name_normalised TEXT NOT NULL UNIQUE,
+    aliases_json TEXT    -- JSON list of alternate name spellings seen
+);
+
+CREATE INDEX IF NOT EXISTS idx_manager_name ON manager(name_normalised);
+
+CREATE TABLE IF NOT EXISTS manager_assignment (
+    assignment_id TEXT PRIMARY KEY,
+    scheme_id TEXT REFERENCES scheme(scheme_id),
+    manager_id TEXT REFERENCES manager(manager_id),
+    from_date TEXT NOT NULL,         -- ISO date; earliest known date managing this scheme
+    to_date TEXT,                    -- NULL = currently managing
+    evidence_doc_id TEXT REFERENCES document(doc_id),
+    confidence TEXT NOT NULL DEFAULT 'observed',  -- 'official' (addendum) | 'observed' (factsheet diff)
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_assignment_scheme ON manager_assignment(scheme_id);
+CREATE INDEX IF NOT EXISTS idx_assignment_manager ON manager_assignment(manager_id);
+
+-- Phase 3: ChangeEvent — manager changes, benchmark changes, TER changes, etc.
+CREATE TABLE IF NOT EXISTS change_event (
+    event_id TEXT PRIMARY KEY,
+    scheme_id TEXT REFERENCES scheme(scheme_id),
+    event_type TEXT NOT NULL,        -- 'manager_change' | 'benchmark_change' | 'ter_change' |
+                                     -- 'category_change' | 'mandate_revision' | 'addendum'
+    effective_date TEXT,             -- ISO date of the change (from the document, if stated)
+    detected_date TEXT NOT NULL,     -- ISO date we detected it
+    detected_from TEXT,              -- 'addendum' | 'factsheet_diff' | 'navall_diff'
+    before_json TEXT,                -- JSON snapshot of the field before
+    after_json TEXT,                 -- JSON snapshot of the field after
+    evidence_doc_id TEXT REFERENCES document(doc_id),
+    confidence TEXT NOT NULL DEFAULT 'observed'
+);
+
+CREATE INDEX IF NOT EXISTS idx_change_event_scheme ON change_event(scheme_id, event_type);
+
+-- Phase 3: TER history — date-stamped TER per plan
+CREATE TABLE IF NOT EXISTS ter_history (
+    ter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id TEXT REFERENCES plan(plan_id),
+    as_of_date TEXT NOT NULL,
+    ter_pct REAL NOT NULL,           -- e.g. 0.63 = 0.63% p.a.
+    source TEXT,                     -- 'amc_disclosure' | 'factsheet'
+    source_doc_id TEXT REFERENCES document(doc_id),
+    retrieved_at TEXT,
+    UNIQUE(plan_id, as_of_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ter_plan_date ON ter_history(plan_id, as_of_date);

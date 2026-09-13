@@ -12,6 +12,9 @@ from indian_mf_mcp import config
 from indian_mf_mcp.analytics import drawdown as dd
 from indian_mf_mcp.analytics import returns as R
 from indian_mf_mcp.analytics import risk as risk_mod
+from indian_mf_mcp.analytics.benchmark import (
+    resolve_benchmark_proxy, benchmark_cagr, benchmark_daily_returns,
+)
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
 from indian_mf_mcp.store import repository as repo
 
@@ -165,6 +168,65 @@ def get_fund_performance(
                                            "(merged/wound-up funds are excluded).")
                 pb.fact("category_median_cagr_5y", med, calc, "calculated",
                         caveat="Category comparator, not benchmark TRI (see benchmark proxy limitation).")
+
+        if "benchmark" in comparators:
+            # Resolve benchmark name from portfolio snapshot footer (most current source)
+            snap = conn.execute(
+                "SELECT benchmark_name FROM portfolio_snapshot WHERE scheme_id = ? "
+                "ORDER BY as_of_date DESC LIMIT 1",
+                (scheme_id,),
+            ).fetchone()
+            bench_name = snap["benchmark_name"] if snap else None
+            proxy = resolve_benchmark_proxy(conn, bench_name)
+            if proxy is None:
+                pb.warn(
+                    f"No benchmark proxy registered for {bench_name!r}. "
+                    "Benchmark comparison unavailable. Category comparator is used instead "
+                    "(add to analytics/benchmark.py BENCHMARK_PROXIES if a suitable index fund "
+                    "NAV is available in the local store)."
+                )
+            elif proxy.get("series") is None:
+                pb.warn(
+                    f"Benchmark proxy '{proxy['label']}' is registered but its NAV is not yet "
+                    "in the local store. Run `mf-mcp ingest-navall` and "
+                    "`mf-mcp backfill-nav-history` to populate it."
+                )
+            else:
+                src_bench = pb.add_source(
+                    type="benchmark_proxy_nav",
+                    proxy_label=proxy["label"],
+                    proxy_plan_id=proxy["plan_id"],
+                    comparator_type="proxy",
+                    caveat=proxy["caveat"],
+                )
+                bench_rets = benchmark_daily_returns(proxy)
+
+                # Trailing CAGR vs benchmark proxy
+                bench_trailing = {}
+                for h in STANDARD_HORIZONS:
+                    start = effective_as_of - timedelta(days=int(h * 365.25))
+                    bval = benchmark_cagr(proxy, start, effective_as_of)
+                    bench_trailing[f"{h}Y"] = bval
+                calc = pb.add_calc(method="cagr_benchmark_proxy", inputs=[src_bench],
+                                    params={"horizons_years": STANDARD_HORIZONS})
+                pb.fact("benchmark_cagr_trailing", bench_trailing, calc, "approximation",
+                        caveat=proxy["caveat"])
+
+                # Risk-adjusted vs benchmark (beta, IR, alpha, up/down capture)
+                if bench_rets and "risk" in metrics:
+                    calc_b = pb.add_calc(method="benchmark_relative_risk",
+                                          inputs=[src_nav, src_bench])
+                    pb.fact("beta", risk_mod.beta(daily_rets, bench_rets), calc_b, "approximation",
+                            caveat=proxy["caveat"])
+                    pb.fact("information_ratio", risk_mod.information_ratio(daily_rets, bench_rets),
+                            calc_b, "approximation", caveat=proxy["caveat"])
+                    pb.fact("alpha", risk_mod.alpha(daily_rets, bench_rets), calc_b, "approximation",
+                            caveat=proxy["caveat"])
+                    udc = risk_mod.up_down_capture(daily_rets, bench_rets)
+                    pb.fact("up_capture", udc["up_capture"], calc_b, "approximation",
+                            caveat=proxy["caveat"])
+                    pb.fact("down_capture", udc["down_capture"], calc_b, "approximation",
+                            caveat=proxy["caveat"])
 
         if nav_series:
             pb.fact("nav_series", [{"date": dt.isoformat(), "nav": v} for dt, v in zip(series.dates, series.navs)],
