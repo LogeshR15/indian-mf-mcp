@@ -286,6 +286,25 @@ every entry below as a snapshot of one investigation, not a settled fact.
     `fileurl` values point at the bare apex `trustmf.com` which 307-redirects to `www.`, so
     anything that bypasses `follow_redirects` will break; and only March-August 2026 are genuine
     `.xlsx` — most of the archive back to Feb 2021 is legacy `.xls` and is skipped downstream.
+  - **Bajaj Finserv** is plain server-rendered WordPress (hello-elementor plus a custom
+    "bajaj-downloads" plugin) with no static file links at all. A first-party static JS asset,
+    `plugins/bajaj-downloads/assets/js/bajaj-downloads.js`, names three ordinary
+    `admin-ajax.php` actions outright — `bajaj_get_filter_options` for years then months, and
+    `bajaj_get_downloads` for a month's files. A WP AJAX nonce is required but ships verbatim in
+    the page's own inline `var bajajDownloads = {...}`, needing no cookie, session or Referer.
+    Files sit on a separate `media.bajajamc.com` host; neither host blocks the honest UA.
+    History is a full archive walk (years → months → files), verified back to July 2023.
+    **The dating trap here is the inverse of most:** the request parameter is a *fiscal* year
+    ("2025-26"), so reconstructing dates from the request would misdate January, February and
+    March by a whole year. The as-of date comes from each row's own title text instead
+    ("...as on 31 Aug 2025"), tolerant of a missing "on", underscore-glued month/year, a
+    misspelled "Septemeber", and titles carrying no day at all. Two more: some months serve
+    `.xls` whose content is real OOXML (handled, since `sniff()` and openpyxl both work off
+    magic bytes rather than the extension), and one sheet (`BFON`) has a **corrupted code cell**
+    reading "hor" instead of its scheme code — so the adapter resolves sheets on column 1
+    explicitly rather than reusing `find_sheet_by_title`, whose first-string-cell heuristic
+    would happily pick up the corruption. A useful reminder that the shared heuristics are
+    conveniences, not invariants.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially

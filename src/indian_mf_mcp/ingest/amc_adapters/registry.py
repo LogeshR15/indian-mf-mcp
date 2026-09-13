@@ -17,6 +17,8 @@ import openpyxl
 
 from indian_mf_mcp.ingest.amc_adapters import combined_workbook
 from indian_mf_mcp.ingest.amc_adapters.axis import AxisAdapter
+from indian_mf_mcp.ingest.amc_adapters.bajaj_finserv import BajajFinservAdapter
+from indian_mf_mcp.ingest.amc_adapters.bajaj_finserv import find_sheet_code as _bajaj_sheet_resolver
 from indian_mf_mcp.ingest.amc_adapters.bank_of_india import BankOfIndiaAdapter
 from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPParibasAdapter
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
@@ -90,6 +92,9 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     # Trust flipped its sheet-naming convention mid-archive (acronyms with the real
     # name in row 2, then full names from Mar 2026), so it carries its own resolver.
     "trust": (TrustAdapter, _trust_sheet_resolver),
+    # One Bajaj sheet has a corrupted code cell in column 0, so it resolves on
+    # column 1 rather than find_sheet_by_title's first-string-cell heuristic.
+    "bajaj-finserv": (BajajFinservAdapter, _bajaj_sheet_resolver),
 }
 
 
