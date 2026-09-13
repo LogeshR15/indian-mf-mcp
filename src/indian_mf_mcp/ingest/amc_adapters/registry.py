@@ -40,6 +40,8 @@ from indian_mf_mcp.ingest.amc_adapters.sundaram import SundaramAdapter
 from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
 from indian_mf_mcp.ingest.amc_adapters.three_sixty_one import ThreeSixtyOneAdapter
 from indian_mf_mcp.ingest.amc_adapters.taurus import TaurusAdapter
+from indian_mf_mcp.ingest.amc_adapters.trust import TrustAdapter
+from indian_mf_mcp.ingest.amc_adapters.trust import _resolve_sheet as _trust_sheet_resolver
 from indian_mf_mcp.ingest.amc_adapters.union import UnionAdapter
 from indian_mf_mcp.ingest.amc_adapters.uti import UTIAdapter
 from indian_mf_mcp.ingest.amc_adapters.zerodha import ZerodhaAdapter
@@ -85,6 +87,9 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "quantum": (QuantumAdapter, _quantum_sheet_resolver),
     "360-one": (ThreeSixtyOneAdapter, combined_workbook.find_sheet_by_title),
     "groww": (GrowwAdapter, combined_workbook.find_sheet_by_title),
+    # Trust flipped its sheet-naming convention mid-archive (acronyms with the real
+    # name in row 2, then full names from Mar 2026), so it carries its own resolver.
+    "trust": (TrustAdapter, _trust_sheet_resolver),
 }
 
 

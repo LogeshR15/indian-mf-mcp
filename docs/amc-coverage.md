@@ -269,6 +269,23 @@ every entry below as a snapshot of one investigation, not a settled fact.
     month: a monthly portfolio is a month-end by regulation, so the day is computed with
     `calendar.monthrange` rather than trusted from inconsistent filename text. Coverage starts
     March 2023 (its first post-rebrand disclosure); pre-2024 files are legacy `.xls` and skipped.
+  - **Trust** is a client-side Vite/React SPA — the registered AMFI URL serves only
+    `<div id="root">` plus a bundle, and the portfolio tab's content is click-gated, i.e.
+    exactly the trap that produced the wrong "blocked" verdict on quant. No browser was needed
+    anyway: the served bundle fetches runtime config from `/config.json`, which names a generic
+    Cosmos-style API base, and every list on the site goes through one
+    `POST Trust/GetData` query descriptor. `GetDisclosureByType` with slug
+    `portfolio-monthly-disclosure` returns the **entire archive in one call** — 67 entries back
+    to February 2021, no pagination. Filenames are hand-uploaded and inconsistent (`Monthly
+    Port_<timestamp>.xlsx`, `Copy of Mont_....xlsx`, stray `-1`/`-002`/`_R` suffixes), so
+    as-of dates come from each entry's `title` text ("... as on DD.MM.YYYY"), which is regular
+    across the whole archive. Its combined workbook has no Index sheet and **flipped naming
+    convention mid-archive** — terse all-caps acronyms with the real name in row 2 for older
+    months, full scheme names from March 2026 — handled by a local resolver keying off
+    `sheet_name.isupper()`, verified against both layouts. Two details for future maintainers:
+    `fileurl` values point at the bare apex `trustmf.com` which 307-redirects to `www.`, so
+    anything that bypasses `follow_redirects` will break; and only March-August 2026 are genuine
+    `.xlsx` — most of the archive back to Feb 2021 is legacy `.xls` and is skipped downstream.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
