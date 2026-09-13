@@ -1,290 +1,176 @@
-# Indian Mutual Fund Intelligence MCP
+# Indian Mutual Fund MCP
 
-Research-and-evidence MCP server for Indian mutual funds. See `spec.md` for the full
-architecture proposal. Retrieves, normalizes and computes NAV, portfolio, and document
-evidence with provenance — it does not score, rate, or recommend funds, and does not attempt
-true performance attribution (not computable from Indian public disclosure).
+An MCP server that gives Claude (or any MCP client) **evidence** about Indian mutual funds —
+NAV history, portfolio holdings, and scheme documents — normalized, reconciled, and tagged
+with where every number came from.
 
-Not investment advice.
+It deliberately does **not** score, rate, or recommend funds.
 
-## Status
+> **Not investment advice.** This is a research tool. It reports what public disclosures say
+> and how confident it is in each fact. Nothing it emits is a recommendation.
 
-- **Phase 1 (evidence spine):** AMFI NAVAll.txt daily ingest, historical NAV backfill,
-  `resolve_fund`, and `get_fund_performance`.
-  - NAVAll.txt is a *one-day snapshot*, so it alone can only ever hold one NAV point per plan
-    and every return/risk metric stays uncomputable. `backfill-nav-history` fills the series
-    from AMFI's `DownloadNAVHistoryReport_Po.aspx`, which orders its columns differently from
-    NAVAll.txt — both are parsed by one column-header-driven parser rather than by field
-    position, so AMFI reordering or inserting columns does not silently corrupt the read.
-    All three scheme universes are fetched (`tp=1` open-ended, `2` close-ended, `3` interval).
-    Requests are chunked by calendar month (a 3-month range is ~74 MB), each completed month
-    is recorded in `ingest_run`, and NAV writes upsert on `(plan_id, date)` — so an
-    interrupted multi-year backfill resumes where it stopped rather than re-downloading
-    gigabytes, and a single failed month is recorded and skipped past instead of aborting the
-    run. Unlike NAVAll.txt the raw payloads are not archived: a decade is several GB and,
-    unlike the daily snapshot's point-in-time taxonomy, it stays re-derivable on demand.
-    Scheme codes not already known from the daily ingest are counted and skipped, never
-    turned into half-populated scheme rows.
-- **Phase 2 (portfolio spine):** live AMC portfolio XLSX parsing with 100%-reconciliation
-  gating, ISIN-keyed change engine (corporate-action flagging, price/flow drift detection),
-  holding persistence, concentration, and `get_fund_portfolio`.
-  - **AMC coverage today (16): PPFAS, SBI, UTI, Mirae Asset, Motilal Oswal, Tata, Nippon
-    India, DSP, Franklin Templeton, Baroda BNP Paribas, Sundaram, Union, LIC, Taurus,
-    Bank of India, and HDFC** (see
-    `ingest/amc_adapters/registry.py`), each verified live end-to-end with its own golden
-    fixture test. Adding an AMC means (1) a real, live-verified way to discover its monthly
-    portfolio files — a static link, or a documented backing endpoint found via a one-time
-    offline Playwright network capture (never a headless browser at runtime, per the spec) —
-    and (2) a golden fixture test proving the parser's column/header/percentage-scale
-    auto-detection handles that AMC's layout. These twelve AMCs exercise real layout
-    diversity: PPFAS/Mirae/DSP/Union share one shape (one file per scheme); SBI, Motilal
-    Oswal, Tata, Nippon India, Baroda BNP Paribas, and Sundaram each publish one combined
-    workbook per month (multiple sheets, one per scheme, most with a differently-laid-out
-    "Index" sheet — SBI/Motilal Oswal/Tata call the code column "fund/scheme/short code",
-    Baroda BNP Paribas calls it "Short Name", Sundaram calls it "ACRONYM", Nippon has no
-    header row at all — all handled by one shared, column-detecting resolver rather than a
-    hardcoded mapping per AMC); Franklin Templeton has no Index sheet at all (the sheet name
-    itself is the code, resolved by scanning each sheet's own title row); UTI puts the ISIN
-    column non-adjacent to the rest entirely and never states a %-to-NAV grand total
-    (self-summing fallback); Tata labels its true 100% total row "NET ASSETS" and suffixes
-    sub-totals; Franklin puts the ISIN column *before* the name column (the reverse of every
-    other AMC). Mirae, Motilal Oswal, DSP, Baroda BNP Paribas, and Union's holdings parsing
-    needed **zero** new parser code, confirming the generalization holds as new AMCs are
-    added rather than just accumulating special cases. Note: DSP and Baroda BNP Paribas's
-    discovered endpoints only ever serve the *latest* month, not full history — a real
-    capability limit, not a bug.
-  - **LIC, Taurus and Bank of India** were added in one parallel batch and each needed **zero**
-    shared-parser changes, which is now the expected outcome rather than a happy accident.
-    All three publish nothing usable in their page HTML, and all three turned out to need no
-    Playwright capture either — the request shape was readable straight from a static asset
-    the site already serves. LIC hides its files behind a 4-step jQuery AJAX filter chain
-    (category → scheme code → year → month → file) whose POST shapes are spelled out in the
-    page's own inline `<script>`; the final POST's `fund_name` field is decorative and does
-    not affect which file is returned. Bank of India's tabs are rendered by a `NoCategoryCall()`
-    handler whose source lives in a plain public `AjaxCall.js`, naming a single
-    `POST /AjaxService.asmx/GetDocuments` that returns all 346 documents back to 2012 in one
-    shot (its long tail mixes legacy `.xls`/`.xlsb` and ad-hoc BOI AXA-era `.pdf` entries into
-    the clean `.xlsx` series that runs from ~Feb 2021 — the adapter skips anything it cannot
-    date rather than guessing). Taurus is plain server-rendered Drupal needing no JS at all,
-    but its year/month dropdowns are taxonomy-term IDs that are irregular and non-formulaic
-    (2026→567, 2025→558, … 2012→63), so the adapter re-parses the `<select>` options on every
-    discovery call instead of hardcoding a map; its filenames also omit the "Taurus" prefix,
-    so scheme-hint matching has to be bidirectional — the one-directional check `union.py`
-    uses would silently return zero documents.
-  - **Ten AMCs remain blocked, down from fifteen — and five of those fifteen were
-    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential and quant are all live as
-    of 2026-09-13 (details below). That is a 1-in-3 error rate in the original triage, and the
-    errors were not random: each came from testing the wrong surface. HDFC and Kotak were
-    judged on their *investor portals* rather than their file hosts; Axis was judged on a
-    *browser route* that was never required; quant was judged on the *wrong page*, one whose
-    content is click-gated; ICICI was judged on an anti-bot script that only ever guarded the
-    SPA shell. **The portal is not the product.** Every verdict below was reached the same way
-    and none should be trusted until re-tested against the file host, any static JS asset the
-    site already serves, and AMFI's own registered URL.
-  - **Still blocked, by failure mode:**
-    - *Commercial WAF on the whole domain* — **Invesco** and **WhiteOak Capital**
-      (CloudFront/AWS-WAF; Invesco's India business may also have been rebranded, possibly
-      making it moot) and **Edelweiss** (Akamai edge WAF on its portfolio API specifically).
-    - *Headless-JS fingerprinting* — **PGIM India**: the real API is same-origin but reachable
-      only after client-side JS the site fingerprints and blocks in Playwright. Worth
-      re-testing the way Axis was solved — by reading its bundled JS for the request shape
-      instead of driving a browser at all.
-    - *No discoverable disclosure page* — **HSBC**. AMFI does register a URL for it, which the
-      original attempt may not have had.
-    - *Application-layer payload encryption* — **Bandhan**, **JM Financial** and **Mahindra
-      Manulife** all return a real `200 OK` whose `{"data"/"payload": "<base64>"}` body decodes
-      to high-entropy ciphertext rather than JSON. Replaying a captured request fails;
-      decrypting would mean reverse-engineering each site's client-side crypto, which is out of
-      scope. The repetition across three unrelated AMCs suggests a shared fintech backend
-      vendor. **But see the Axis finding below**: Axis's own bundled JS exposes an
-      `API_ENCRYPTION_STATUS_CMS: "none"` flag marking its CMS tier as plaintext while its
-      transactional tier is encrypted. An AMC running both tiers would look encrypted if only
-      the transactional one was probed, so these three deserve a re-test before the verdict
-      stands.
-    - *Policy, not technology* — **Canara Robeco**'s discovery works cleanly (static links,
-      exact 100% reconciliation, zero parser changes), but its WAF rejects the project's honest
-      User-Agent while accepting a spoofed browser one. Asked the user rather than deciding
-      unilaterally; **the decision was to skip it** and keep spec.md's honest-UA policy intact.
-      This is the one entry that is a choice rather than an obstacle.
-    - *Sandbox artifact, not a real blocker* — **Aditya Birla**'s discovery endpoint is found
-      and documented; its file host is blocked by *this sandbox's* network policy and should
-      work in a normal environment.
-  - **HDFC moved from "blocked outright" to live, and the reason generalizes.** Its listing
-    host and its *file* host are different machines with different rules:
-    `www.hdfcfund.com` returns a flat edge-level `403 Access Denied` to the honest
-    User-Agent on every path including the bare homepage (not a CAPTCHA — a browser is never
-    challenged), while `files.hdfcfund.com` is a public S3 bucket that serves that same honest
-    User-Agent a clean `200` and the real workbook. Fetching was never blocked; only discovery
-    was. And discovery turned out not to need the listing page at all, because the S3 key is
-    fully computable:
-    `/s3fs-public/<YYYY-MM>/Monthly <SCHEME> - <D Month YYYY>.xlsx`, where the folder is the
-    month *after* the as-of month and the day is not zero-padded. Three keys guessed from that
-    template — for months and schemes never observed — all returned real workbooks, and the
-    August 2026 Flexi Cap file parses at exact 100% reconciliation with 95 holdings and zero
-    parser changes. Quirks, all handled in the adapter: `HEAD` is denied bucket-wide (403 even
-    for keys that exist), so existence is probed with `GET`+`Range: bytes=0-0` (206 = hit);
-    an absent key returns **403, not 404**, because `s3:ListBucket` is denied so S3 reports
-    `AccessDenied` rather than `NoSuchKey`; and keys are case-sensitive while HDFC's own casing
-    is wildly inconsistent between schemes ("HDFC Nifty Metal ETF" vs "HDFC NIFTY SMALLCAP 250
-    ETF"), so `scheme_hint` must be spelled as HDFC spells it. Verified present every month
-    sampled back to March 2024, patchy before that — per-month probing skips gaps rather than
-    guessing. **The general lesson: "blocked" was being decided by testing the AMC's investor
-    portal, but the portal and the file host are often separate infrastructure with separate
-    rules. The remaining entries on this blocked list were all judged on their portals, and
-    none has yet been re-tested for an independently-reachable file host.**
-  - **quant** is driven by a classic ASP.NET WebForms *PageMethod* —
-    `POST /statutorydisclosures.aspx/displaydisclouser` with `{"id": "<year>", "cat": "MONTHLY
-    PORTFOLIO"}`, returning `{"d": "<ul>...</ul>"}`, one `<li><a>` per month. Despite being
-    WebForms it needs no cookies, viewstate or session at all, and history comes from looping
-    the `id` param over years (verified live back to 2018). Its filenames are hand-uploaded and
-    carry **no date convention whatsoever**, so as-of dates must be parsed from each entry's
-    anchor *text* ("December 2023"), never from the URL — the exact inverse of HDFC, where the
-    URL is the only reliable source. Its combined workbook also has no Index sheet and puts the
-    constant literal "quant Mutual Fund" in row 1 with the real scheme name in **row 2**,
-    unique so far among combined-workbook AMCs: neither shared resolver fits
-    (`find_sheet_code` needs an Index sheet, `find_sheet_by_title` reads row 1), so the adapter
-    carries its own small row-2 variant rather than bending the shared helper for one AMC.
-  - **Navi** is a WordPress/Elementor page whose REST endpoint
-    (`POST /wp-json/nv/v1/documents`, `category=884` for Monthly Portfolio) is spelled out in
-    the theme's own static `app.js` — again no browser needed. Three quirks: it requires a
-    `WP-NONCE` header that is genuinely enforced (omitting it 403s) but is WordPress's standard
-    *anonymous* nonce — identical for every visitor and openly embedded in the page's inline
-    `navi_property` variable, so the adapter scrapes it once per discovery call and reuses it;
-    the endpoint has no bulk-list mode (`financial_year` and full month name are both
-    mandatory), so history means one POST per calendar month; and files are served from two
-    different hosts by era (`public-assets.prod.navi-tech.in` recent,
-    `public-navi-docs.s3.ap-south-1.amazonaws.com` older) where a 2022-2024 range of URLs carry
-    **no file extension at all** despite serving correct XLSX content-types. The adapter
-    therefore never filters on extension, deferring to the shared content sniff — a filter that
-    looked obviously safe for every other AMC would have silently dropped three years of Navi
-    files. Pre-2021 months publish one combined legacy `.xls` per AMC rather than per-scheme
-    workbooks; those are surfaced and then skipped by the existing `skipped_format` path rather
-    than dropped at discovery, so the gap is visible instead of invisible.
-  - **Zerodha** is a Next.js page but server-side-rendered, so the entire archive — 360
-    monthly files, Nov 2023 to Aug 2026 — arrives embedded as JSON in `__NEXT_DATA__` on one
-    plain GET; "history" needs no pagination or query params at all, just filtering what is
-    already in hand. The same blob carries the scheme-code map (`ZNFTY` = "Zerodha Nifty 50
-    Index Fund"), which the adapter needs because filenames use short codes, not names. Files
-    live on a separate `assets.zerodhafundhouse.com` host, fetchable with the honest UA. Its
-    filenames are hand-inconsistent in three separate ways — dash spacing (`ZNFTY - Monthly`
-    vs `ZEN50- Monthly`), month spelling (`August 2026`, `Aug 2025`, `Sept 2025`) and double
-    spaces — so matching is deliberately loose. The two oldest files (Nov/Dec 2023) predate
-    Zerodha's per-scheme split and are combined workbooks with no scheme-code prefix; the
-    adapter returns them only when no `scheme_hint` filter is given.
-  - **Axis is live, and its blocked entry was measuring the wrong thing.** It was judged on a
-    browser-automation route that turned out to be unnecessary: the document listing is a plain
-    JSON API on `www.axismf.com` itself, callable with `httpx` and the honest User-Agent, so
-    the Playwright fingerprinting that stopped the previous attempt never had to be involved.
-    `POST /cms/token` with `{}` yields a bearer token with no login; `POST
-    /cms/get-scheme-documents` with `{"sdType":"yearMonthSchemeDocs","sdID":"sdMonthSchemePortfolio"}`
-    returns scheme categories, years and months, and re-posting with `year`/`month`/`schemeCode`
-    returns a same-origin `.xlsx` URL under the key `docuementURL` (the AMC's own typo, matched
-    verbatim). **The generalizable find:** Axis's own bundled JS sets
-    `API_ENCRYPTION_STATUS_CMS: "none"` for `/cms/*` while its transactional API is set to
-    `"enable"` — i.e. an AMC can run a plaintext CMS tier *alongside* an encrypted one. Worth
-    checking such a flag in bundled JS before concluding an AMC's payloads are encrypted, which
-    is precisely the verdict currently standing against Bandhan, JM Financial and Mahindra
-    Manulife.
-  - **Kotak is the cleanest proof of the portal/file-host split**, because unlike HDFC its
-    recorded verdict was *accurate*: `www.kotakmf.com`, homepage included, really is
-    whole-domain Radware Bot Manager — every request 302s to `validate.perfdrive.com` with
-    `server: rdwr` and a `stormcaster.js` challenge. Accurate, and irrelevant.
-    `vatseelabs-s3.kotakmf.com` is a separate unblocked CloudFront/S3 host serving every
-    investor document, found by a public search for a real Kotak filename. The URL needs
-    neither a scheme name nor a listing — it is computable from the as-of date alone. **Real
-    capability limit:** that bucket keeps only a rolling ~4-month window (May-Aug 2026 return
-    200; April 2026 and earlier genuinely 403, probed systematically back to Jan 2024) —
-    absence, not a second naming scheme. Unlike HDFC's bucket, `HEAD` works here. Kotak's
-    per-scheme sheets use a *merged* "Name of Instrument" header spanning three columns, so row
-    data sits two columns right of where header detection expects it; left alone the parser
-    reads the ISIN as the instrument name and drops the real ISIN. That is repaired in the
-    adapter's own `fetch()`, which returns a single repaired sheet — so it needs no
-    `sheet_resolver` despite Kotak publishing a combined workbook.
-  - **ICICI Prudential** was judged on an F5 `TSbd` anti-bot script that is real but only ever
-    guards the SPA shell — which loads fine for the honest User-Agent and never challenges it.
-    Two further traps sat on top: every non-root path returns a **200 SPA shell carrying a 404
-    status** (cosmetic, resolved client-side by a real browser), and the listing page's own
-    `apimf.icicipruamc.com` API 401s cross-origin — a genuine dead end that looks like the
-    answer. The actual Download button ignores that API entirely and opens a static Azure Blob
-    URL under `www.icicipruamc.com/blob/downloads/...`, public and plain-`200` to the honest UA.
-    The path is computable, with one manual-upload artifact: the month folder is three-letter
-    except May/June/July, which are spelled out. Unlike every other AMC so far, each month is
-    **one ZIP containing every scheme's xlsx**, so `fetch()` downloads and extracts the member
-    matching the scheme. Coverage starts January 2025, matching the site's own displayed
-    history. This is the only AMC to date that required a *shared*-parser change (see below).
-  - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
-    effort — exactly what the spec calls "the real moat" of the project — but the pattern
-    (Playwright discovery → adapter → golden test) is proven across twelve materially
-    different AMC layouts, and the failure modes for the rest are now well-characterized
-    (multiple WAF vendors, headless-JS fingerprinting, SPA-with-no-API, payload encryption, a
-    broken page, or UA policy) rather than unknowns.
+---
 
-- **Phase 3 (document intelligence, partial):** PDF section extraction (SEBI-standard headings +
-  keyword search) ground-truthed against a real AMFI-hosted SID, `get_document`, and
-  `get_fund_profile` (identity, benchmark, verbatim mandate excerpts, realised Direct-vs-Regular
-  cost spread computed from NAV alone). TER capture and fund-manager extraction from factsheets
-  are not yet implemented and are reported as explicitly unavailable, never fabricated.
+## What makes this different
 
-Remaining AMC adapters, TER/manager extraction, and change monitoring (Phase 4) are not yet built.
+Most fund data sources hand you a number and expect you to trust it. This one is built around
+the opposite instinct:
 
-## Usage
+- **Every fact carries its provenance.** Each value is tagged `official`, `calculated`,
+  `observed`, `approximation`, or `inferred`, so a model reasoning over it can weight a
+  regulator-filed holding differently from a figure derived with an error term.
+- **Portfolios must reconcile to 100% or they don't load.** A monthly disclosure whose weights
+  don't sum is rejected, not silently ingested. Partial data is worse than no data.
+- **Gaps are reported, never filled.** If a fund's TER isn't available, the answer is
+  "unavailable" — not a plausible guess.
+- **Raw source files are archived forever.** AMFI's daily NAV file is the only record of
+  point-in-time scheme taxonomy; once a day passes uncaptured, that history is gone.
 
-```
+## What it can answer
+
+| Tool | What it gives you |
+|---|---|
+| `resolve_fund` | Turns a messy fund name, ISIN, or scheme code into unambiguous scheme + plan identity |
+| `get_fund_performance` | Trailing and rolling returns, volatility, Sharpe/Sortino, drawdowns, stress windows |
+| `get_fund_portfolio` | Holdings, month-over-month changes, concentration, corporate-action flags |
+| `get_fund_profile` | Identity, benchmark, verbatim mandate excerpts, realised Direct-vs-Regular cost spread |
+| `get_document` | Section extraction from SIDs and other scheme PDFs |
+
+Always call `resolve_fund` first — Indian scheme names are genuinely ambiguous, with renames,
+near-identical names across AMCs, and 4–8 plan/option variants per scheme.
+
+---
+
+## Quickstart
+
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone https://github.com/LogeshR15/indian-mf-mcp.git
+cd indian-mf-mcp
 uv sync
-uv run mf-mcp ingest-navall   # populate the local store with AMFI's daily NAV universe
-uv run mf-mcp backfill-nav-history --from 2016-01-01   # historical NAV; resumable, run once
-uv run mf-mcp backfill-portfolio --amc ppfas \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Parag Parikh Flexi Cap Fund" \
-    --from 2019-01-01
-uv run mf-mcp backfill-portfolio --amc sbi \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "SBI Flexicap Fund" \
-    --from 2024-01-01
-uv run mf-mcp backfill-portfolio --amc uti \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "UTI Flexi Cap Fund" \
-    --from 2024-01-01
-uv run mf-mcp backfill-portfolio --amc mirae \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Mirae Asset Large Cap Fund" \
-    --from 2024-01-01
-uv run mf-mcp backfill-portfolio --amc motilal-oswal \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Motilal Oswal Flexi Cap Fund" \
-    --from 2024-01-01
-uv run mf-mcp backfill-portfolio --amc tata \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Tata Large & Mid Cap Fund" \
-    --from 2024-01-01
-uv run mf-mcp backfill-portfolio --amc nippon \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Nippon India Large Cap Fund" \
-    --from 2024-01-01
-uv run mf-mcp backfill-portfolio --amc dsp \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "DSP Flexi Cap Fund" \
-    --from 2024-01-01   # DSP's endpoint only ever serves the latest month, not full history
-uv run mf-mcp backfill-portfolio --amc franklin-templeton \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Franklin India Bluechip Fund" \
-    --from 2024-01-01
-uv run mf-mcp backfill-portfolio --amc baroda-bnp-paribas \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Baroda BNP Paribas Large Cap Fund" \
-    --from 2024-01-01   # only the latest month is available
-uv run mf-mcp backfill-portfolio --amc sundaram \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Sundaram Large and Mid Cap Fund" \
-    --from 2013-01-01   # full archive available back to 2012-2013
-uv run mf-mcp backfill-portfolio --amc union \
-    --scheme-id <scheme_id from resolve_fund> \
-    --scheme-hint "Union Flexi Cap Fund" \
-    --from 2021-01-01
-uv run mf-mcp serve           # run the MCP server (stdio)
 ```
 
-Data lives in `~/.indian-mf-mcp/` (SQLite store + raw archive; never evicted).
+Populate the local store — NAV first, since everything else resolves against that universe:
 
-Run tests with `uv run pytest -q`. One test (`test_ppfas_live_smoke.py`) hits the real PPFAS
-site and is skipped automatically if the network is unavailable.
+```bash
+uv run mf-mcp ingest-navall
+```
+
+```bash
+uv run mf-mcp backfill-nav-history --from 2016-01-01
+```
+
+The history backfill downloads roughly a decade of daily NAVs (~17M points, about 35 minutes).
+It is resumable and idempotent: completed months are recorded, so an interrupted run picks up
+where it stopped instead of re-downloading gigabytes. Run it once.
+
+Then load portfolio holdings for whichever funds you care about:
+
+```bash
+uv run mf-mcp backfill-portfolio --amc ppfas --scheme-id <from resolve_fund> --scheme-hint "Parag Parikh Flexi Cap Fund" --from 2019-01-01
+```
+
+Finally, run the server:
+
+```bash
+uv run mf-mcp serve
+```
+
+Data lives in `~/.indian-mf-mcp/` — a SQLite store plus a never-evicted raw archive. Override
+the location with `INDIAN_MF_MCP_HOME`.
+
+### Connect it to Claude Code
+
+```bash
+claude mcp add indian-mf -- uv run --directory /path/to/indian-mf-mcp mf-mcp serve
+```
+
+---
+
+## AMC coverage
+
+**22 of ~53 AMCs** have working portfolio adapters:
+
+Axis · Bank of India · Baroda BNP Paribas · DSP · Franklin Templeton · HDFC ·
+ICICI Prudential · Kotak Mahindra · LIC · Mirae Asset · Motilal Oswal · Navi · Nippon India ·
+PPFAS · quant · SBI · Sundaram · Tata · Taurus · Union · UTI · Zerodha
+
+NAV, scheme identity and taxonomy come from AMFI and cover **all** schemes — coverage gaps
+affect portfolio holdings only.
+
+Adding an AMC is the most valuable contribution you can make, and the most self-contained.
+See **[docs/amc-coverage.md](docs/amc-coverage.md)** for per-AMC discovery notes, what's still
+blocked and why, and **[CONTRIBUTING.md](CONTRIBUTING.md)** for the walkthrough.
+
+---
+
+## How it fits together
+
+```
+AMFI NAVAll.txt ─────┐
+AMFI NAV history ────┼──► ingest ──► SQLite store ──► analytics ──┐
+AMC portfolio files ─┤                (+ raw archive)             ├──► MCP tools ──► Claude
+AMC / AMFI PDFs ─────┘                                            │
+                                      change engine ──────────────┘
+```
+
+```
+src/indian_mf_mcp/
+├── ingest/          fetching and loading
+│   └── amc_adapters/   one module per AMC — the main contribution surface
+├── parsers/         AMFI delimited files, portfolio XLSX, PDF sections
+├── normalize/       scheme taxonomy, plan/option parsing
+├── analytics/       returns, risk, drawdown, cost
+├── change_engine/   portfolio diffing, corporate actions, concentration
+├── store/           SQLite schema and repository
+└── tools/           the five MCP tools
+```
+
+`spec.md` holds the full architecture rationale, including which facts are deliberately *not*
+computable from Indian public disclosure and why.
+
+---
+
+## Running tests
+
+```bash
+uv run pytest -q
+```
+
+Unit tests are offline and run against golden fixtures — real AMC files committed to
+`tests/fixtures/`. Integration tests hit live AMC sites and skip automatically when the
+network is unavailable. To stay offline:
+
+```bash
+uv run pytest tests/unit -q
+```
+
+---
+
+## Contributing
+
+Contributions are welcome, especially new AMC adapters.
+Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** — it covers the adapter walkthrough, the
+project's data-integrity rules, and the sourcing policy.
+
+One rule is worth stating up front, because it shapes everything else:
+
+> **We do not evade access controls.** No spoofed User-Agents, no proxy rotation, no TLS
+> fingerprint spoofing, no CAPTCHA solving. If an AMC blocks this project's honest
+> User-Agent, the answer is to find infrastructure that isn't blocked — or to record it as
+> blocked and move on.
+
+That rule has cost us at least one otherwise-clean integration. It stays.
+
+---
+
+## Licence
+
+Not yet chosen — see [#licensing](CONTRIBUTING.md#licence). Until a licence is added, default
+copyright applies and contributions cannot be formally accepted.
+
+## Data sources
+
+Public disclosures from [AMFI](https://www.amfiindia.com/) and individual AMC websites. This
+project is not affiliated with or endorsed by AMFI, SEBI, or any AMC.
