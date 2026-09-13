@@ -20,6 +20,7 @@ from indian_mf_mcp.ingest.amc_adapters.bank_of_india import BankOfIndiaAdapter
 from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPParibasAdapter
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
 from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTempletonAdapter
+from indian_mf_mcp.ingest.amc_adapters.hdfc import HDFCAdapter
 from indian_mf_mcp.ingest.amc_adapters.lic import LicAdapter
 from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
 from indian_mf_mcp.ingest.amc_adapters.motilal_oswal import MotilalOswalAdapter
@@ -57,6 +58,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "lic": (LicAdapter, None),
     "taurus": (TaurusAdapter, None),
     "bank-of-india": (BankOfIndiaAdapter, combined_workbook.find_sheet_code),
+    "hdfc": (HDFCAdapter, None),
 }
 
 

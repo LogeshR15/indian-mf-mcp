@@ -28,9 +28,9 @@ Not investment advice.
 - **Phase 2 (portfolio spine):** live AMC portfolio XLSX parsing with 100%-reconciliation
   gating, ISIN-keyed change engine (corporate-action flagging, price/flow drift detection),
   holding persistence, concentration, and `get_fund_portfolio`.
-  - **AMC coverage today (15): PPFAS, SBI, UTI, Mirae Asset, Motilal Oswal, Tata, Nippon
-    India, DSP, Franklin Templeton, Baroda BNP Paribas, Sundaram, Union, LIC, Taurus, and
-    Bank of India** (see
+  - **AMC coverage today (16): PPFAS, SBI, UTI, Mirae Asset, Motilal Oswal, Tata, Nippon
+    India, DSP, Franklin Templeton, Baroda BNP Paribas, Sundaram, Union, LIC, Taurus,
+    Bank of India, and HDFC** (see
     `ingest/amc_adapters/registry.py`), each verified live end-to-end with its own golden
     fixture test. Adding an AMC means (1) a real, live-verified way to discover its monthly
     portfolio files — a static link, or a documented backing endpoint found via a one-time
@@ -72,14 +72,9 @@ Not investment advice.
     so scheme-hint matching has to be bidirectional — the one-directional check `union.py`
     uses would silently return zero documents.
   - **Fifteen AMCs were attempted and are genuinely blocked, not just unstarted** — each
-    investigated live with real effort, spanning distinct failure modes: **HDFC** and
-    **Kotak Mahindra** are bot-protected outright — though note HDFC's failure mode is *not* a
-    CAPTCHA (an earlier note here said Radware Bot Manager): re-probed 2026-09-13, the entire
-    `hdfcfund.com` domain, bare homepage included, returns a flat edge-level `403 Access
-    Denied` to the project's honest User-Agent, while a real browser is served normally and is
-    never challenged. `api.hdfcfund.com` is a separate host that *does* answer the honest UA,
-    but every path on it returns the same 41-byte catch-all placeholder, so it exposes no
-    discoverable surface. **ICICI
+    investigated live with real effort, spanning distinct failure modes: **Kotak Mahindra** is
+    bot-protected outright. (**HDFC** was listed here too and is now live — see below; the
+    lesson it taught applies to this whole list.) **ICICI
     Prudential** (F5 BIG-IP WAF, TLS-fingerprint-based), **Invesco** and **WhiteOak Capital**
     (CloudFront/AWS-WAF on the whole domain — Invesco's India business may also have been
     rebranded, making this one possibly moot), and **Edelweiss** (Akamai edge WAF blocking
@@ -104,6 +99,29 @@ Not investment advice.
     it** and keep the honest-User-Agent policy from spec.md intact. **Aditya Birla**'s
     discovery endpoint is already found and documented but its file lives behind a CDN host
     this *sandbox's* network policy blocks (not a real-world blocker).
+  - **HDFC moved from "blocked outright" to live, and the reason generalizes.** Its listing
+    host and its *file* host are different machines with different rules:
+    `www.hdfcfund.com` returns a flat edge-level `403 Access Denied` to the honest
+    User-Agent on every path including the bare homepage (not a CAPTCHA — a browser is never
+    challenged), while `files.hdfcfund.com` is a public S3 bucket that serves that same honest
+    User-Agent a clean `200` and the real workbook. Fetching was never blocked; only discovery
+    was. And discovery turned out not to need the listing page at all, because the S3 key is
+    fully computable:
+    `/s3fs-public/<YYYY-MM>/Monthly <SCHEME> - <D Month YYYY>.xlsx`, where the folder is the
+    month *after* the as-of month and the day is not zero-padded. Three keys guessed from that
+    template — for months and schemes never observed — all returned real workbooks, and the
+    August 2026 Flexi Cap file parses at exact 100% reconciliation with 95 holdings and zero
+    parser changes. Quirks, all handled in the adapter: `HEAD` is denied bucket-wide (403 even
+    for keys that exist), so existence is probed with `GET`+`Range: bytes=0-0` (206 = hit);
+    an absent key returns **403, not 404**, because `s3:ListBucket` is denied so S3 reports
+    `AccessDenied` rather than `NoSuchKey`; and keys are case-sensitive while HDFC's own casing
+    is wildly inconsistent between schemes ("HDFC Nifty Metal ETF" vs "HDFC NIFTY SMALLCAP 250
+    ETF"), so `scheme_hint` must be spelled as HDFC spells it. Verified present every month
+    sampled back to March 2024, patchy before that — per-month probing skips gaps rather than
+    guessing. **The general lesson: "blocked" was being decided by testing the AMC's investor
+    portal, but the portal and the file host are often separate infrastructure with separate
+    rules. The remaining entries on this blocked list were all judged on their portals, and
+    none has yet been re-tested for an independently-reachable file host.**
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
