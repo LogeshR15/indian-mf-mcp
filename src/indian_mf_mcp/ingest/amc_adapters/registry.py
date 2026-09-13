@@ -22,6 +22,7 @@ from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPPariba
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
 from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTempletonAdapter
 from indian_mf_mcp.ingest.amc_adapters.hdfc import HDFCAdapter
+from indian_mf_mcp.ingest.amc_adapters.kotak import KotakAdapter
 from indian_mf_mcp.ingest.amc_adapters.lic import LicAdapter
 from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
 from indian_mf_mcp.ingest.amc_adapters.motilal_oswal import MotilalOswalAdapter
@@ -67,7 +68,10 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "quant": (QuantAdapter, _quant_sheet_resolver),
     "navi": (NaviAdapter, None),
     "zerodha": (ZerodhaAdapter, None),
+    # Kotak's fetch() returns an already-extracted, repaired single-sheet workbook
+    # per scheme, so it needs no sheet_resolver despite publishing a combined file.
     "axis": (AxisAdapter, None),
+    "kotak": (KotakAdapter, None),
 }
 
 
