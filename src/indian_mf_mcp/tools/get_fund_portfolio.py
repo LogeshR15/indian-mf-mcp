@@ -1,19 +1,29 @@
 """get_fund_portfolio: holdings, allocations, change detection. The heart of the differentiated
 value (spec §5.2) — requires per-AMC fetching, XLSX parsing, ISIN-keyed set arithmetic and
 corporate-action handling, none of which is Claude's job.
+
+Phase 4 additions:
+  - market_cap allocation via AMFI half-yearly cap list (point-in-time safe)
+  - portfolio overlap when len(scheme_ids) >= 2 and 'overlap' in sections
+  - data_staleness_warning when snapshot is >60 days old and adapter health is known
 """
 from __future__ import annotations
 
 import sqlite3
 from datetime import date, timedelta
 
+from indian_mf_mcp.analytics.overlap import OverlapResult, all_pairs_overlap
 from indian_mf_mcp.change_engine.concentration import concentration_stats
 from indian_mf_mcp.change_engine.persistence import compute_persistence
 from indian_mf_mcp.change_engine.portfolio_diff import diff_snapshots
+from indian_mf_mcp.ingest.amfi_caplist import compute_market_cap_allocation
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
 from indian_mf_mcp.store import portfolio_repository as prepo
 
 HISTORY_MONTHS = {"none": 0, "12M": 12, "36M": 36, "60M": 60}
+
+# Warn when the most recent snapshot is older than this many days
+_STALENESS_THRESHOLD_DAYS = 60
 
 
 def _holdings_dicts(rows) -> list[dict]:
@@ -26,7 +36,12 @@ def _holdings_dicts(rows) -> list[dict]:
     } for r in rows]
 
 
-def _allocations(rows) -> dict:
+def _allocations(conn: sqlite3.Connection, rows, as_of_date: str) -> dict:
+    """Compute sector, asset-class, cash, and market-cap allocations.
+
+    market_cap is now populated via the AMFI half-yearly cap list (Phase 4).
+    Falls back gracefully if the cap list has not been downloaded yet.
+    """
     by_sector: dict[str, float] = {}
     by_asset_class: dict[str, float] = {}
     cash_pct = 0.0
@@ -40,12 +55,48 @@ def _allocations(rows) -> dict:
             key = r["industry_or_rating"].strip()
             if key:
                 by_sector[key] = by_sector.get(key, 0.0) + pct
+
+    market_cap = compute_market_cap_allocation(conn, rows, as_of_date)
+
     return {
         "by_sector": dict(sorted(by_sector.items(), key=lambda kv: kv[1], reverse=True)),
         "by_asset_class": by_asset_class,
         "cash_pct": cash_pct,
-        "market_cap": None,  # AMFI half-yearly cap-list join not yet implemented (Phase 2 gap)
+        "market_cap": market_cap,
     }
+
+
+def _staleness_warning(conn: sqlite3.Connection, amc_id: str | None, snapshot_date: str) -> str | None:
+    """Return a staleness warning string if the snapshot is old and adapter health is known."""
+    try:
+        today = date.today()
+        snap_date = date.fromisoformat(snapshot_date)
+        gap = (today - snap_date).days
+        if gap <= _STALENESS_THRESHOLD_DAYS:
+            return None
+        # Check adapter health table for additional context
+        if amc_id:
+            health = conn.execute(
+                "SELECT status, checked_at, error FROM adapter_health "
+                "WHERE amc_id = ? AND doc_type = 'monthly_portfolio' LIMIT 1",
+                (amc_id,),
+            ).fetchone()
+            if health:
+                status = health["status"]
+                checked = (health["checked_at"] or "")[:10]
+                err = health["error"] or ""
+                return (
+                    f"Portfolio data is {gap} days old (last snapshot: {snapshot_date}). "
+                    f"Adapter health as of {checked}: {status}"
+                    + (f" — {err}" if err and status != "ok" else "")
+                    + ". Run 'mf-mcp health' and 'mf-mcp backfill-portfolio' to refresh."
+                )
+        return (
+            f"Portfolio data is {gap} days old (last snapshot: {snapshot_date}). "
+            f"Run 'mf-mcp backfill-portfolio' to fetch newer disclosures."
+        )
+    except Exception:
+        return None
 
 
 def get_fund_portfolio(
@@ -59,7 +110,10 @@ def get_fund_portfolio(
     provenance: str = "compact",
 ) -> dict:
     sections = sections or ["holdings", "allocations", "changes", "concentration", "persistence"]
-    results = {}
+    results: dict = {}
+
+    # Collect holdings for all schemes (needed for overlap)
+    scheme_holdings_for_overlap: dict[str, list] = {}
 
     for scheme_id in scheme_ids:
         pb = ProvenanceBuilder()
@@ -76,11 +130,19 @@ def get_fund_portfolio(
             continue
 
         holdings_rows = prepo.get_holdings(conn, snapshot["snapshot_id"])
+        scheme_holdings_for_overlap[scheme_id] = holdings_rows
+
         src_snap = pb.add_source(
             type="amc_portfolio_disclosure", scheme_id=scheme_id,
             as_of_date=snapshot["as_of_date"], doc_id=snapshot["source_doc_id"],
             disclosure_type=snapshot["disclosure_type"],
         )
+
+        # Resolve AMC for staleness check
+        amc_row = conn.execute(
+            "SELECT amc_id FROM scheme WHERE scheme_id = ?", (scheme_id,)
+        ).fetchone()
+        amc_id = amc_row["amc_id"] if amc_row else None
 
         meta = {
             "scheme_id": scheme_id, "as_of_date": snapshot["as_of_date"],
@@ -89,6 +151,11 @@ def get_fund_portfolio(
             "benchmark_name": snapshot["benchmark_name"],
         }
 
+        # Staleness warning
+        stale_warn = _staleness_warning(conn, amc_id, snapshot["as_of_date"])
+        if stale_warn:
+            meta["data_staleness_warning"] = stale_warn
+
         if "holdings" in sections:
             hd = _holdings_dicts(holdings_rows)
             if holdings_limit:
@@ -96,11 +163,13 @@ def get_fund_portfolio(
             pb.fact("holdings", hd, src_snap, "official")
 
         if "allocations" in sections:
-            alloc = _allocations(holdings_rows)
+            alloc = _allocations(conn, holdings_rows, snapshot["as_of_date"])
             calc = pb.add_calc(method="allocation_aggregation", inputs=[src_snap])
-            pb.fact("allocations", alloc, calc, "calculated",
-                    caveat="market_cap allocation requires the AMFI half-yearly cap list join, "
-                           "not yet implemented — reported as unavailable, not guessed.")
+            market_cap_caveat = (
+                alloc["market_cap"].get("caveat")
+                or "market_cap computed from AMFI half-yearly cap list (point-in-time)."
+            )
+            pb.fact("allocations", alloc, calc, "calculated", caveat=market_cap_caveat)
 
         if "concentration" in sections:
             equity_like_pcts = [h["pct_nav"] for h in holdings_rows
@@ -169,5 +238,38 @@ def get_fund_portfolio(
                 meta["persistence_n_snapshots"] = len(snaps)
 
         results[scheme_id] = pb.build(provenance=provenance, extra_meta=meta)
+
+    # ---- Portfolio overlap (Phase 4) ----
+    # Computed when >=2 schemes and 'overlap' in sections (or by default when multi-scheme)
+    if len(scheme_ids) >= 2 and "overlap" in sections and len(scheme_holdings_for_overlap) >= 2:
+        overlap_results = all_pairs_overlap(scheme_holdings_for_overlap)
+        results["_overlap"] = {
+            "pairs": [
+                {
+                    "scheme_id_a": r.scheme_id_a,
+                    "scheme_id_b": r.scheme_id_b,
+                    "overlap_pct_a": r.overlap_pct_a,
+                    "overlap_pct_b": r.overlap_pct_b,
+                    "overlap_pct_avg": r.overlap_pct_avg,
+                    "common_count": r.common_count,
+                    "total_count_a": r.total_count_a,
+                    "total_count_b": r.total_count_b,
+                    "common_holdings": r.common_holdings,
+                }
+                for r in overlap_results
+            ],
+            "meta": {
+                "kind": "calculated",
+                "method": "isin_set_intersection_weighted_pct_nav",
+                "population": "equity_foreign_reit_only",
+                "caveat": (
+                    "Overlap is computed from equity, foreign equity, and REIT holdings only. "
+                    "Cash, debt, and derivative positions are excluded. "
+                    "ISINs appearing in multiple sub-sections of the same fund are summed. "
+                    "overlap_pct_a = sum of fund A's %NAV in ISINs also held by fund B "
+                    "(asymmetric: a large fund and a small fund will have very different readings)."
+                ),
+            },
+        }
 
     return results

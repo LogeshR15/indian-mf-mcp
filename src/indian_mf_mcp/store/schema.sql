@@ -204,3 +204,42 @@ CREATE TABLE IF NOT EXISTS ter_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ter_plan_date ON ter_history(plan_id, as_of_date);
+
+-- Phase 4: AMFI half-yearly stock categorisation (cap list)
+-- Stores every fetched copy keyed by (isin, effective_date) for point-in-time lookups.
+-- Never use a future cap list to reclassify a past portfolio (spec §3.6, §15).
+CREATE TABLE IF NOT EXISTS isin_market_cap (
+    isin TEXT NOT NULL,
+    market_cap TEXT NOT NULL,        -- 'large' | 'mid' | 'small'
+    effective_date TEXT NOT NULL,    -- ISO date this categorisation list came into effect
+    caplist_doc_id TEXT REFERENCES document(doc_id),
+    PRIMARY KEY (isin, effective_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_isin_cap ON isin_market_cap(isin, effective_date);
+
+-- Phase 4: Scheme → adapter hint mapping for bulk backfill
+-- Populated during navall ingest and by explicit registration.
+-- Used by 'mf-mcp backfill --amc <amc>' to drive list_documents() without per-scheme args.
+CREATE TABLE IF NOT EXISTS scheme_adapter_hint (
+    scheme_id TEXT REFERENCES scheme(scheme_id),
+    amc_id TEXT NOT NULL,
+    adapter_hint TEXT NOT NULL,   -- scheme name as the adapter's list_documents() recognises it
+    updated_at TEXT,
+    PRIMARY KEY (scheme_id, amc_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_adapter_hint_amc ON scheme_adapter_hint(amc_id);
+
+-- Phase 4: Adapter health check results — per-AMC, per-doc-type
+-- Updated by 'mf-mcp health' command; read by get_fund_portfolio to surface staleness warnings.
+CREATE TABLE IF NOT EXISTS adapter_health (
+    amc_id TEXT NOT NULL,
+    doc_type TEXT NOT NULL,          -- matches DocType enum values
+    checked_at TEXT NOT NULL,        -- ISO datetime of most recent check
+    status TEXT NOT NULL,            -- 'ok' | 'degraded' | 'broken'
+    last_doc_date TEXT,              -- date of most recent doc found during check
+    actual_gap_days INTEGER,         -- days since last_doc_date at time of check
+    error TEXT,                      -- error message if status != 'ok'
+    PRIMARY KEY (amc_id, doc_type)
+);

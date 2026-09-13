@@ -38,25 +38,75 @@ def _series_for_plan(conn: sqlite3.Connection, plan_id: str) -> R.NavSeries:
     return R.from_rows(rows)
 
 
-def _category_median_cagr(conn: sqlite3.Connection, scheme_id: str, category: str, years: float, as_of: date) -> float | None:
-    """Category comparator computed from the full ingested universe (spec §3.4 option 3)."""
+def _category_stats(
+    conn: sqlite3.Connection,
+    scheme_id: str,
+    category: str,
+    years: float,
+    as_of: date,
+) -> dict:
+    """Category comparator computed from the full ingested universe (spec §3.4 option 3).
+
+    Returns a dict with median, p25, p75, n_funds, rank, percentile.
+    Always includes a survivorship-bias caveat (spec §15):
+      "Category statistics include only currently-active schemes. Wound-up, merged, or
+       discontinued schemes are excluded — this introduces upward survivorship bias of
+       unknown magnitude."
+    """
     rows = conn.execute(
-        """SELECT p.plan_id FROM plan p JOIN scheme s ON s.scheme_id = p.scheme_id
+        """SELECT p.plan_id, p.scheme_id FROM plan p JOIN scheme s ON s.scheme_id = p.scheme_id
            WHERE s.category = ? AND p.plan_type = 'Direct' AND p.option_type = 'Growth'
              AND p.active = 1""",
         (category,),
     ).fetchall()
     start = as_of - timedelta(days=int(years * 365.25))
-    vals = []
+    vals: list[float] = []
+    this_val: float | None = None
     for r in rows:
         series = _series_for_plan(conn, r["plan_id"])
         c = R.cagr(series, start, as_of)
         if c is not None:
             vals.append(c)
-    if not vals:
-        return None
+            if r["scheme_id"] == scheme_id:
+                this_val = c
+
+    n = len(vals)
+    if n == 0:
+        return {
+            "median": None, "p25": None, "p75": None,
+            "n_funds": 0, "rank": None, "percentile": None,
+            "caveat": (
+                "No comparable funds with sufficient NAV history found in the local store. "
+                "Run 'mf-mcp backfill-nav-history' to populate the universe."
+            ),
+        }
+
     vals.sort()
-    return vals[len(vals) // 2]
+    median = vals[n // 2]
+    p25 = vals[max(0, n // 4)]
+    p75 = vals[min(n - 1, (3 * n) // 4)]
+
+    # Rank and percentile (1 = best)
+    rank: int | None = None
+    percentile: float | None = None
+    if this_val is not None:
+        rank = sum(1 for v in vals if v > this_val) + 1  # rank 1 = highest CAGR
+        percentile = round(100.0 * (1 - (rank - 1) / n), 1)
+
+    return {
+        "median": round(median, 2),
+        "p25": round(p25, 2),
+        "p75": round(p75, 2),
+        "n_funds": n,
+        "rank": rank,
+        "percentile": percentile,
+        "survivorship_bias_caveat": (
+            "Category statistics are computed from currently-active schemes only. "
+            "Schemes that were wound up, merged into other funds, or discontinued due to "
+            "underperformance are excluded — this biases all figures upward by an unknown "
+            "magnitude. This is an inherent limitation of public MF disclosure data."
+        ),
+    }
 
 
 def get_fund_performance(
@@ -162,12 +212,23 @@ def get_fund_performance(
             taxonomy = repo.latest_taxonomy(conn, scheme_id)
             category = taxonomy["category"] if taxonomy else None
             if category:
-                med = _category_median_cagr(conn, scheme_id, category, 5.0, effective_as_of)
-                calc = pb.add_calc(method="category_median_cagr", params={"category": category, "years": 5},
-                                    caveat="Computed from live schemes only; survivorship-biased upward "
-                                           "(merged/wound-up funds are excluded).")
-                pb.fact("category_median_cagr_5y", med, calc, "calculated",
-                        caveat="Category comparator, not benchmark TRI (see benchmark proxy limitation).")
+                cat_stats = _category_stats(conn, scheme_id, category, 5.0, effective_as_of)
+                calc = pb.add_calc(
+                    method="category_stats_5y",
+                    params={"category": category, "years": 5},
+                    caveat=cat_stats.get("survivorship_bias_caveat", ""),
+                )
+                pb.fact(
+                    "category_stats_5y",
+                    cat_stats,
+                    calc,
+                    "calculated",
+                    caveat=(
+                        "Category comparator computed from live Direct/Growth schemes only. "
+                        "Survivorship bias is present — see survivorship_bias_caveat field. "
+                        "Not benchmark TRI (see benchmark proxy limitation)."
+                    ),
+                )
 
         if "benchmark" in comparators:
             # Resolve benchmark name from portfolio snapshot footer (most current source)
