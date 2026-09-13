@@ -73,7 +73,13 @@ Not investment advice.
     uses would silently return zero documents.
   - **Fifteen AMCs were attempted and are genuinely blocked, not just unstarted** — each
     investigated live with real effort, spanning distinct failure modes: **HDFC** and
-    **Kotak Mahindra** (Radware Bot Manager CAPTCHA) are bot-protected outright. **ICICI
+    **Kotak Mahindra** are bot-protected outright — though note HDFC's failure mode is *not* a
+    CAPTCHA (an earlier note here said Radware Bot Manager): re-probed 2026-09-13, the entire
+    `hdfcfund.com` domain, bare homepage included, returns a flat edge-level `403 Access
+    Denied` to the project's honest User-Agent, while a real browser is served normally and is
+    never challenged. `api.hdfcfund.com` is a separate host that *does* answer the honest UA,
+    but every path on it returns the same 41-byte catch-all placeholder, so it exposes no
+    discoverable surface. **ICICI
     Prudential** (F5 BIG-IP WAF, TLS-fingerprint-based), **Invesco** and **WhiteOak Capital**
     (CloudFront/AWS-WAF on the whole domain — Invesco's India business may also have been
     rebranded, making this one possibly moot), and **Edelweiss** (Akamai edge WAF blocking
