@@ -71,38 +71,44 @@ Not investment advice.
     discovery call instead of hardcoding a map; its filenames also omit the "Taurus" prefix,
     so scheme-hint matching has to be bidirectional — the one-directional check `union.py`
     uses would silently return zero documents.
-  - **Fifteen AMCs were attempted and are genuinely blocked, not just unstarted** — each
-    investigated live with real effort, spanning distinct failure modes: **Kotak Mahindra** is
-    bot-protected outright. (**HDFC** was listed here too and is now live — see below; the
-    lesson it taught applies to this whole list.) **ICICI
-    Prudential** (F5 BIG-IP WAF, TLS-fingerprint-based), **Invesco** and **WhiteOak Capital**
-    (CloudFront/AWS-WAF on the whole domain — Invesco's India business may also have been
-    rebranded, making this one possibly moot), and **Edelweiss** (Akamai edge WAF blocking
-    its portfolio API specifically) are each blocked by a commercial WAF vendor. **PGIM India** is a case where the real API is
-    same-origin but only reachable after client-side JS execution the site fingerprints and
-    blocks in Playwright specifically — a different failure mode from a WAF blocking the API
-    itself. (**Axis** was listed here too and is now live: the browser route it was judged on
-    was never necessary — see below.) **HSBC** has no discoverable
-    disclosure page at all. **Three AMCs — Bandhan, JM Financial, and Mahindra Manulife —
-    share a distinct and notable failure mode**: their APIs return a real `200 OK` with a
-    `{"data"/"payload": "<base64>"}` body that decodes to high-entropy ciphertext, not JSON —
-    application-layer payload encryption, not access control. Replaying even a captured real
-    request fails; decrypting it would mean reverse-engineering each site's client-side
-    crypto scheme, a fundamentally different and more invasive problem than a WAF bypass, and
-    explicitly out of scope. The repetition across three unrelated AMCs suggests a shared
-    fintech backend vendor for investor-portal APIs — worth checking before investing more
-    time on any AMC that returns this same opaque-payload shape. **quant is now live** — its
-    blocked entry was wrong twice over: the "broken" page (empty ASP.NET WebForms viewstate,
-    zero backing requests) was a *different* page from the one AMFI actually registers, and
-    that registered page, `quantmutual.com/statutory-disclosures`, serves a clean `200` with
-    the whole accordion rendered server-side. What made it look dead is that the MONTHLY
-    PORTFOLIO section renders empty until a year tab is clicked. See below. **Canara Robeco**'s file discovery actually
-    *works* cleanly (static links, exact 100% reconciliation, zero parser changes) — but its
-    WAF blocks the project's honest User-Agent while accepting a spoofed browser UA; asked
-    the user explicitly rather than deciding unilaterally, and **the decision was to skip
-    it** and keep the honest-User-Agent policy from spec.md intact. **Aditya Birla**'s
-    discovery endpoint is already found and documented but its file lives behind a CDN host
-    this *sandbox's* network policy blocks (not a real-world blocker).
+  - **Ten AMCs remain blocked, down from fifteen — and five of those fifteen were
+    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential and quant are all live as
+    of 2026-09-13 (details below). That is a 1-in-3 error rate in the original triage, and the
+    errors were not random: each came from testing the wrong surface. HDFC and Kotak were
+    judged on their *investor portals* rather than their file hosts; Axis was judged on a
+    *browser route* that was never required; quant was judged on the *wrong page*, one whose
+    content is click-gated; ICICI was judged on an anti-bot script that only ever guarded the
+    SPA shell. **The portal is not the product.** Every verdict below was reached the same way
+    and none should be trusted until re-tested against the file host, any static JS asset the
+    site already serves, and AMFI's own registered URL.
+  - **Still blocked, by failure mode:**
+    - *Commercial WAF on the whole domain* — **Invesco** and **WhiteOak Capital**
+      (CloudFront/AWS-WAF; Invesco's India business may also have been rebranded, possibly
+      making it moot) and **Edelweiss** (Akamai edge WAF on its portfolio API specifically).
+    - *Headless-JS fingerprinting* — **PGIM India**: the real API is same-origin but reachable
+      only after client-side JS the site fingerprints and blocks in Playwright. Worth
+      re-testing the way Axis was solved — by reading its bundled JS for the request shape
+      instead of driving a browser at all.
+    - *No discoverable disclosure page* — **HSBC**. AMFI does register a URL for it, which the
+      original attempt may not have had.
+    - *Application-layer payload encryption* — **Bandhan**, **JM Financial** and **Mahindra
+      Manulife** all return a real `200 OK` whose `{"data"/"payload": "<base64>"}` body decodes
+      to high-entropy ciphertext rather than JSON. Replaying a captured request fails;
+      decrypting would mean reverse-engineering each site's client-side crypto, which is out of
+      scope. The repetition across three unrelated AMCs suggests a shared fintech backend
+      vendor. **But see the Axis finding below**: Axis's own bundled JS exposes an
+      `API_ENCRYPTION_STATUS_CMS: "none"` flag marking its CMS tier as plaintext while its
+      transactional tier is encrypted. An AMC running both tiers would look encrypted if only
+      the transactional one was probed, so these three deserve a re-test before the verdict
+      stands.
+    - *Policy, not technology* — **Canara Robeco**'s discovery works cleanly (static links,
+      exact 100% reconciliation, zero parser changes), but its WAF rejects the project's honest
+      User-Agent while accepting a spoofed browser one. Asked the user rather than deciding
+      unilaterally; **the decision was to skip it** and keep spec.md's honest-UA policy intact.
+      This is the one entry that is a choice rather than an obstacle.
+    - *Sandbox artifact, not a real blocker* — **Aditya Birla**'s discovery endpoint is found
+      and documented; its file host is blocked by *this sandbox's* network policy and should
+      work in a normal environment.
   - **HDFC moved from "blocked outright" to live, and the reason generalizes.** Its listing
     host and its *file* host are different machines with different rules:
     `www.hdfcfund.com` returns a flat edge-level `403 Access Denied` to the honest
@@ -179,6 +185,33 @@ Not investment advice.
     checking such a flag in bundled JS before concluding an AMC's payloads are encrypted, which
     is precisely the verdict currently standing against Bandhan, JM Financial and Mahindra
     Manulife.
+  - **Kotak is the cleanest proof of the portal/file-host split**, because unlike HDFC its
+    recorded verdict was *accurate*: `www.kotakmf.com`, homepage included, really is
+    whole-domain Radware Bot Manager — every request 302s to `validate.perfdrive.com` with
+    `server: rdwr` and a `stormcaster.js` challenge. Accurate, and irrelevant.
+    `vatseelabs-s3.kotakmf.com` is a separate unblocked CloudFront/S3 host serving every
+    investor document, found by a public search for a real Kotak filename. The URL needs
+    neither a scheme name nor a listing — it is computable from the as-of date alone. **Real
+    capability limit:** that bucket keeps only a rolling ~4-month window (May-Aug 2026 return
+    200; April 2026 and earlier genuinely 403, probed systematically back to Jan 2024) —
+    absence, not a second naming scheme. Unlike HDFC's bucket, `HEAD` works here. Kotak's
+    per-scheme sheets use a *merged* "Name of Instrument" header spanning three columns, so row
+    data sits two columns right of where header detection expects it; left alone the parser
+    reads the ISIN as the instrument name and drops the real ISIN. That is repaired in the
+    adapter's own `fetch()`, which returns a single repaired sheet — so it needs no
+    `sheet_resolver` despite Kotak publishing a combined workbook.
+  - **ICICI Prudential** was judged on an F5 `TSbd` anti-bot script that is real but only ever
+    guards the SPA shell — which loads fine for the honest User-Agent and never challenges it.
+    Two further traps sat on top: every non-root path returns a **200 SPA shell carrying a 404
+    status** (cosmetic, resolved client-side by a real browser), and the listing page's own
+    `apimf.icicipruamc.com` API 401s cross-origin — a genuine dead end that looks like the
+    answer. The actual Download button ignores that API entirely and opens a static Azure Blob
+    URL under `www.icicipruamc.com/blob/downloads/...`, public and plain-`200` to the honest UA.
+    The path is computable, with one manual-upload artifact: the month folder is three-letter
+    except May/June/July, which are spelled out. Unlike every other AMC so far, each month is
+    **one ZIP containing every scheme's xlsx**, so `fetch()` downloads and extracts the member
+    matching the scheme. Coverage starts January 2025, matching the site's own displayed
+    history. This is the only AMC to date that required a *shared*-parser change (see below).
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
