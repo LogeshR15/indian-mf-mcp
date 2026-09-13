@@ -28,8 +28,9 @@ Not investment advice.
 - **Phase 2 (portfolio spine):** live AMC portfolio XLSX parsing with 100%-reconciliation
   gating, ISIN-keyed change engine (corporate-action flagging, price/flow drift detection),
   holding persistence, concentration, and `get_fund_portfolio`.
-  - **AMC coverage today (12): PPFAS, SBI, UTI, Mirae Asset, Motilal Oswal, Tata, Nippon
-    India, DSP, Franklin Templeton, Baroda BNP Paribas, Sundaram, and Union** (see
+  - **AMC coverage today (15): PPFAS, SBI, UTI, Mirae Asset, Motilal Oswal, Tata, Nippon
+    India, DSP, Franklin Templeton, Baroda BNP Paribas, Sundaram, Union, LIC, Taurus, and
+    Bank of India** (see
     `ingest/amc_adapters/registry.py`), each verified live end-to-end with its own golden
     fixture test. Adding an AMC means (1) a real, live-verified way to discover its monthly
     portfolio files — a static link, or a documented backing endpoint found via a one-time
@@ -52,6 +53,24 @@ Not investment advice.
     added rather than just accumulating special cases. Note: DSP and Baroda BNP Paribas's
     discovered endpoints only ever serve the *latest* month, not full history — a real
     capability limit, not a bug.
+  - **LIC, Taurus and Bank of India** were added in one parallel batch and each needed **zero**
+    shared-parser changes, which is now the expected outcome rather than a happy accident.
+    All three publish nothing usable in their page HTML, and all three turned out to need no
+    Playwright capture either — the request shape was readable straight from a static asset
+    the site already serves. LIC hides its files behind a 4-step jQuery AJAX filter chain
+    (category → scheme code → year → month → file) whose POST shapes are spelled out in the
+    page's own inline `<script>`; the final POST's `fund_name` field is decorative and does
+    not affect which file is returned. Bank of India's tabs are rendered by a `NoCategoryCall()`
+    handler whose source lives in a plain public `AjaxCall.js`, naming a single
+    `POST /AjaxService.asmx/GetDocuments` that returns all 346 documents back to 2012 in one
+    shot (its long tail mixes legacy `.xls`/`.xlsb` and ad-hoc BOI AXA-era `.pdf` entries into
+    the clean `.xlsx` series that runs from ~Feb 2021 — the adapter skips anything it cannot
+    date rather than guessing). Taurus is plain server-rendered Drupal needing no JS at all,
+    but its year/month dropdowns are taxonomy-term IDs that are irregular and non-formulaic
+    (2026→567, 2025→558, … 2012→63), so the adapter re-parses the `<select>` options on every
+    discovery call instead of hardcoding a map; its filenames also omit the "Taurus" prefix,
+    so scheme-hint matching has to be bidirectional — the one-directional check `union.py`
+    uses would silently return zero documents.
   - **Fifteen AMCs were attempted and are genuinely blocked, not just unstarted** — each
     investigated live with real effort, spanning distinct failure modes: **HDFC** and
     **Kotak Mahindra** (Radware Bot Manager CAPTCHA) are bot-protected outright. **ICICI

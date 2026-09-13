@@ -16,9 +16,11 @@ from typing import Callable
 import openpyxl
 
 from indian_mf_mcp.ingest.amc_adapters import combined_workbook
+from indian_mf_mcp.ingest.amc_adapters.bank_of_india import BankOfIndiaAdapter
 from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPParibasAdapter
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
 from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTempletonAdapter
+from indian_mf_mcp.ingest.amc_adapters.lic import LicAdapter
 from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
 from indian_mf_mcp.ingest.amc_adapters.motilal_oswal import MotilalOswalAdapter
 from indian_mf_mcp.ingest.amc_adapters.nippon import NipponAdapter
@@ -26,6 +28,7 @@ from indian_mf_mcp.ingest.amc_adapters.ppfas import PPFASAdapter
 from indian_mf_mcp.ingest.amc_adapters.sbi import SBIAdapter
 from indian_mf_mcp.ingest.amc_adapters.sundaram import SundaramAdapter
 from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
+from indian_mf_mcp.ingest.amc_adapters.taurus import TaurusAdapter
 from indian_mf_mcp.ingest.amc_adapters.union import UnionAdapter
 from indian_mf_mcp.ingest.amc_adapters.uti import UTIAdapter
 
@@ -51,6 +54,9 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "baroda-bnp-paribas": (BarodaBNPParibasAdapter, combined_workbook.find_sheet_code),
     "sundaram": (SundaramAdapter, combined_workbook.find_sheet_code),
     "union": (UnionAdapter, None),
+    "lic": (LicAdapter, None),
+    "taurus": (TaurusAdapter, None),
+    "bank-of-india": (BankOfIndiaAdapter, combined_workbook.find_sheet_code),
 }
 
 

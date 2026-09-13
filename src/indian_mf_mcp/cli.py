@@ -27,7 +27,7 @@ def main() -> None:
     backfill.add_argument("--amc", required=True,
                            choices=["ppfas", "sbi", "uti", "mirae", "motilal-oswal", "tata",
                                     "nippon", "dsp", "franklin-templeton", "baroda-bnp-paribas",
-                                    "sundaram", "union"],
+                                    "sundaram", "union", "lic", "taurus", "bank-of-india"],
                            help="AMC adapter to use")
     backfill.add_argument("--scheme-id", required=True, help="scheme_id from resolve_fund")
     backfill.add_argument("--scheme-hint", required=True,
