@@ -37,6 +37,7 @@ from indian_mf_mcp.ingest.amc_adapters.quantum import _resolve_sheet as _quantum
 from indian_mf_mcp.ingest.amc_adapters.sbi import SBIAdapter
 from indian_mf_mcp.ingest.amc_adapters.sundaram import SundaramAdapter
 from indian_mf_mcp.ingest.amc_adapters.tata import TataAdapter
+from indian_mf_mcp.ingest.amc_adapters.three_sixty_one import ThreeSixtyOneAdapter
 from indian_mf_mcp.ingest.amc_adapters.taurus import TaurusAdapter
 from indian_mf_mcp.ingest.amc_adapters.union import UnionAdapter
 from indian_mf_mcp.ingest.amc_adapters.uti import UTIAdapter
@@ -81,6 +82,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     # Quantum's Index sheet says "Scheme Full Name", which the shared resolver's
     # "scheme name" substring test misses; it carries its own resolver instead.
     "quantum": (QuantumAdapter, _quantum_sheet_resolver),
+    "360-one": (ThreeSixtyOneAdapter, combined_workbook.find_sheet_by_title),
 }
 
 

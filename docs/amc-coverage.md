@@ -237,6 +237,24 @@ every entry below as a snapshot of one investigation, not a settled fact.
     shipped with a two-year window instead of a decade. Its Index sheet reads "Scheme Full
     Name", which the shared resolver's `"scheme name"` substring test misses because "full"
     breaks contiguity; handled with a local resolver rather than loosening the shared helper.
+  - **360 ONE** (formerly IIFL Asset Management, rebranded 2023 — visible in old filenames and
+    even in OLE metadata authorship) is a Next.js App Router site using React Server Components
+    streaming, *not* classic `__NEXT_DATA__`. The whole disclosures data model — every tab,
+    category, year, month and file — arrives inline in the first HTML response as
+    `<script>self.__next_f.push([1,"<chunk>"])</script>` tags; unescape a chunk's JSON string,
+    strip its numeric id prefix, and it parses as valid JSON (React Flight references like
+    `"$Lb"` are just plain strings). So the entire 2018-2026 archive, 104 monthly documents,
+    comes from **one page load** with no AJAX, no pagination and no Playwright. The adapter
+    searches the parsed tree recursively for the "Monthly Portfolio" subcategory rather than
+    indexing into a fixed array position, so a re-ordered page does not silently break it.
+    Files live on a separate public S3 bucket (`s3.ap-south-1.amazonaws.com/x-web-s3.360.one/`)
+    that answers the honest UA cleanly. Filenames are a nine-year grab-bag with no usable
+    convention, so discovery is required rather than computation — but discovery is cheap here.
+    Two file-format notes: some recent files are *named* `.xls` while actually being ZIP-based
+    xlsx (magic bytes confirm; the shared `sniff()` already handles it), and everything from
+    2020 and earlier is genuine legacy BIFF `.xls`, correctly skipped as `skipped_format`.
+    **Real capability limit: usable history through this pipeline starts 2021**, even though
+    the listing advertises back to 2018.
   - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
