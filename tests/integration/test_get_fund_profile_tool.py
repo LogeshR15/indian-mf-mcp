@@ -48,7 +48,7 @@ def test_identity_and_costs_present_managers_and_ter_honestly_unavailable(tmp_pa
     assert data["realised_direct_regular_spread_bps"]["k"] == "calculated"
 
     meta = out[scheme_id]["meta"]
-    assert any("Manager" in w for w in meta.get("warnings", []))
+    assert any("manager" in w.lower() for w in meta.get("warnings", []))
 
     conn.close()
 

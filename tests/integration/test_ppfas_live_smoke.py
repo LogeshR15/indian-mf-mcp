@@ -56,7 +56,11 @@ def test_ppfas_end_to_end_live(tmp_path):
 
     assert len(data["holdings"]["v"]) > 50
     assert data["concentration"]["v"]["top10_pct"] > 0
-    assert data["allocations"]["v"]["market_cap"] is None  # honestly reported as unavailable
+    # No cap list loaded in this tmp_path store (mf-mcp update-caplist was never run against
+    # it) -> compute_market_cap_allocation's honest-unavailable shape, not a bare None.
+    market_cap = data["allocations"]["v"]["market_cap"]
+    assert market_cap["large_pct"] is None
+    assert "update-caplist" in market_cap["caveat"]
     assert "changes" in data or payload["meta"].get("warnings")
     assert "persistence" in data
 
