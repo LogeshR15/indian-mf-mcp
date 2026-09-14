@@ -32,7 +32,7 @@ the opposite instinct:
 |---|---|
 | `resolve_fund` | Turns a messy fund name, ISIN, or scheme code into unambiguous scheme + plan identity |
 | `get_fund_performance` | Trailing and rolling returns, volatility, Sharpe/Sortino, drawdowns, stress windows, benchmark-proxy and category comparators |
-| `get_fund_portfolio` | Holdings, month-over-month changes, concentration, persistence/conviction streaks, corporate-action flags, portfolio overlap between funds |
+| `get_fund_portfolio` | Holdings, sector/asset-class/market-cap allocation, month-over-month changes (with corporate-action and ISIN-change flags), concentration, persistence/conviction streaks, portfolio overlap between funds |
 | `get_fund_profile` | Identity, benchmark, verbatim mandate excerpts, TER, realised Direct-vs-Regular cost spread, current managers |
 | `get_document` | Section extraction from SIDs and other scheme PDFs |
 | `list_disclosure_events` | Detected changes over time — manager changes, TER changes, benchmark changes — each tagged by how it was detected |
@@ -113,14 +113,18 @@ In keeping with "gaps are reported, never filled," worth stating plainly here to
 
 - **Portfolio parsing is XLSX-only for now.** A few AMCs occasionally publish legacy `.xls` or
   PDF-only portfolios; those are detected and skipped rather than mis-parsed.
-- **Market-cap allocation (large/mid/small) isn't populated yet.** The read path is
-  version-stamped and point-in-time-safe by design, but the AMFI cap-list ingest that would
-  feed it isn't wired up, so this section currently reports unavailable.
-- **Addendum ingestion — the source of `official`-confidence change events (manager/TER/benchmark
-  changes filed as legal notices) — isn't functional yet.** `list_disclosure_events` still works
-  off `observed`-confidence events reconstructed by diffing factsheets.
+- **Market-cap allocation (large/mid/small) requires a one-time setup step.** Run
+  `uv run mf-mcp update-caplist` to populate AMFI's half-yearly stock categorisation; until
+  then, `get_fund_portfolio`'s market-cap section reports unavailable rather than guessing.
+  The join itself is version-stamped and point-in-time-safe — a 2021 portfolio is never
+  reclassified against a newer cap list.
+- **Addendum ingestion (`mf-mcp ingest-addendum` / `backfill-addenda`) covers manager, TER,
+  benchmark and category-change notices, but relies on regex extraction over PDF/HTML text**,
+  so a differently-worded notice can be missed. `list_disclosure_events` combines these
+  `official`-confidence, addendum-sourced events with `observed`-confidence ones reconstructed
+  by diffing factsheets — both are labelled, never blended.
 
-Neither of these is silently papered over: the affected tool responses report the gap rather
+None of this is silently papered over: the affected tool responses report the gap rather
 than guessing.
 
 ---
