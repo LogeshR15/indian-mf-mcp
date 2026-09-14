@@ -15,6 +15,7 @@ from indian_mf_mcp.analytics import risk as risk_mod
 from indian_mf_mcp.analytics.benchmark import (
     resolve_benchmark_proxy, benchmark_cagr, benchmark_daily_returns,
 )
+from indian_mf_mcp.normalize.taxonomy import is_segregated_portfolio_name
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
 from indian_mf_mcp.store import repository as repo
 
@@ -52,13 +53,20 @@ def _category_stats(
       "Category statistics include only currently-active schemes. Wound-up, merged, or
        discontinued schemes are excluded — this introduces upward survivorship bias of
        unknown magnitude."
+
+    Segregated (side-pocketed) portfolios are also excluded (spec §9.2: "detect and surface;
+    don't merge") — a side-pocket's return series reflects a defaulted-exposure workout, not
+    a fund manager's ordinary performance, so averaging it into a category median would
+    silently distort the comparator for every other fund in that category.
     """
     rows = conn.execute(
-        """SELECT p.plan_id, p.scheme_id FROM plan p JOIN scheme s ON s.scheme_id = p.scheme_id
+        """SELECT p.plan_id, p.scheme_id, s.name FROM plan p
+           JOIN scheme s ON s.scheme_id = p.scheme_id
            WHERE s.category = ? AND p.plan_type = 'Direct' AND p.option_type = 'Growth'
              AND p.active = 1""",
         (category,),
     ).fetchall()
+    rows = [r for r in rows if not is_segregated_portfolio_name(r["name"])]
     start = as_of - timedelta(days=int(years * 365.25))
     vals: list[float] = []
     this_val: float | None = None
@@ -104,7 +112,10 @@ def _category_stats(
             "Category statistics are computed from currently-active schemes only. "
             "Schemes that were wound up, merged into other funds, or discontinued due to "
             "underperformance are excluded — this biases all figures upward by an unknown "
-            "magnitude. This is an inherent limitation of public MF disclosure data."
+            "magnitude. This is an inherent limitation of public MF disclosure data. "
+            "Segregated (side-pocketed) portfolios are also excluded by name-pattern match — "
+            "their return series reflects a defaulted-exposure workout, not ordinary "
+            "fund-manager performance."
         ),
     }
 
