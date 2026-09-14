@@ -111,8 +111,11 @@ blocked and why, and **[CONTRIBUTING.md](CONTRIBUTING.md)** for the walkthrough.
 
 In keeping with "gaps are reported, never filled," worth stating plainly here too:
 
-- **Portfolio parsing is XLSX-only for now.** A few AMCs occasionally publish legacy `.xls` or
-  PDF-only portfolios; those are detected and skipped rather than mis-parsed.
+- **Portfolio parsing covers XLSX and legacy `.xls` (binary BIFF)**, sniffed by magic bytes
+  rather than trusted by extension. A handful of AMCs occasionally publish PDF-only portfolio
+  disclosures instead of a spreadsheet; those are detected and skipped rather than
+  mis-parsed — the spec only calls for spreadsheet-format portfolio parsing (PDF extraction
+  is reserved for SIDs, factsheets, and addenda, which `get_document` already covers).
 - **Market-cap allocation (large/mid/small) requires a one-time setup step.** Run
   `uv run mf-mcp update-caplist` to populate AMFI's half-yearly stock categorisation; until
   then, `get_fund_portfolio`'s market-cap section reports unavailable rather than guessing.
@@ -143,7 +146,7 @@ AMC / AMFI PDFs ─────┘                                            �
 src/indian_mf_mcp/
 ├── ingest/          fetching and loading (NAV, portfolios, factsheets, SIDs, addenda)
 │   └── amc_adapters/   one module per AMC — the main contribution surface
-├── parsers/         AMFI delimited files, portfolio XLSX, PDF sections, format sniffing
+├── parsers/         AMFI delimited files, portfolio XLSX/XLS, PDF sections, format sniffing
 ├── normalize/       scheme taxonomy, plan/option parsing
 ├── analytics/       returns, risk, drawdown, benchmark proxy, cost spread, overlap
 ├── change_engine/   portfolio diffing, corporate actions, concentration, persistence

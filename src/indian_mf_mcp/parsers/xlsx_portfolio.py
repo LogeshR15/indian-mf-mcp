@@ -14,11 +14,13 @@ Design rules (spec §7):
 """
 from __future__ import annotations
 
+import datetime as _dt
 import io
 import re
 from dataclasses import dataclass, field
 
 import openpyxl
+import xlrd
 
 # Keyword substrings (not exact phrases — wording varies by AMC, e.g. PPFAS "Equity & Equity
 # Related" vs UTI "EQUITY AND EQUITY RELATED") that mark a header row as TOP-LEVEL, resetting
@@ -92,6 +94,7 @@ class PortfolioParseResult:
     reconciliation_ok: bool | None = None  # None if GRAND TOTAL not found at all
     as_of_date_str: str | None = None      # raw string as printed, e.g. "August 31, 2026"
     benchmark_name: str | None = None
+    sheet_count: int = 0  # total sheets in the source workbook, regardless of which was parsed
     parse_confidence: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
@@ -235,25 +238,88 @@ def parse_portfolio_xlsx(raw: bytes, sheet_name: str | None = None) -> Portfolio
     """sheet_name: for AMCs that publish one combined workbook covering every scheme (e.g.
     SBI: one sheet per scheme, an "Index" sheet mapping short-codes to names), select the
     scheme's own sheet. None uses the first sheet (PPFAS-style: one file per scheme)."""
-    result = PortfolioParseResult()
     try:
         wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced via parse_confidence, not raised
-        result.warnings.append(f"workbook failed to open: {exc}")
-        result.parse_confidence = 0.0
-        return result
+        return _open_failure(f"workbook failed to open: {exc}")
 
     if sheet_name is not None:
         if sheet_name not in wb.sheetnames:
-            result.warnings.append(f"sheet {sheet_name!r} not found in workbook "
-                                    f"(available: {wb.sheetnames[:10]}...)")
-            result.parse_confidence = 0.0
-            return result
+            return _open_failure(f"sheet {sheet_name!r} not found in workbook "
+                                  f"(available: {wb.sheetnames[:10]}...)")
         ws = wb[sheet_name]
     else:
         ws = wb[wb.sheetnames[0]]
     rows = list(ws.iter_rows(values_only=True))
+    result = _parse_rows(rows)
+    result.sheet_count = len(wb.sheetnames)
+    return result
 
+
+def parse_portfolio_xls(raw: bytes, sheet_name: str | None = None) -> PortfolioParseResult:
+    """Legacy binary Excel (.xls / BIFF) counterpart of parse_portfolio_xlsx — same AMC
+    layout conventions and column-detection heuristics, different container format (spec §7:
+    "XLS (legacy BIFF) | xlrd<2.0 or LibreOffice headless conversion"). In practice xlrd>=2.0
+    dropped .xlsx support entirely and reads only .xls now, which is exactly the format this
+    function targets, so the project's xlrd>=2.0.1 pin is already the right one — no upper
+    bound needed. Shares the entire row-walking core with parse_portfolio_xlsx via
+    _parse_rows(); only raw-bytes-to-rows extraction differs by format."""
+    try:
+        wb = xlrd.open_workbook(file_contents=raw)
+    except Exception as exc:  # noqa: BLE001 - surfaced via parse_confidence, not raised
+        return _open_failure(f"workbook failed to open: {exc}")
+
+    sheet_names = wb.sheet_names()
+    if sheet_name is not None:
+        if sheet_name not in sheet_names:
+            return _open_failure(f"sheet {sheet_name!r} not found in workbook "
+                                  f"(available: {sheet_names[:10]}...)")
+        ws = wb.sheet_by_name(sheet_name)
+    else:
+        ws = wb.sheet_by_index(0)
+    rows = xls_sheet_to_rows(ws)
+    result = _parse_rows(rows)
+    result.sheet_count = len(sheet_names)
+    return result
+
+
+def _open_failure(message: str) -> PortfolioParseResult:
+    result = PortfolioParseResult()
+    result.warnings.append(message)
+    result.parse_confidence = 0.0
+    return result
+
+
+def xls_sheet_to_rows(ws) -> list[tuple]:
+    """Convert an xlrd Sheet into the same list[tuple] shape openpyxl's
+    `ws.iter_rows(values_only=True)` produces, so _parse_rows() never needs to know which
+    library produced its input. Two format differences are normalised here rather than in
+    the shared row-walking logic: xlrd represents a blank cell as '' (empty string), not
+    None — openpyxl's convention, which _is_blank()/_num() already assume — and a date cell
+    as a raw float serial rather than a datetime object."""
+    rows: list[tuple] = []
+    for r in range(ws.nrows):
+        row = []
+        for c in range(ws.ncols):
+            cell = ws.cell(r, c)
+            value = cell.value
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                try:
+                    value = _dt.datetime(*xlrd.xldate_as_tuple(value, ws.book.datemode))
+                except Exception:  # noqa: BLE001 - fall back to the raw serial, never raise
+                    pass
+            elif value == "":
+                value = None
+            row.append(value)
+        rows.append(tuple(row))
+    return rows
+
+
+def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
+    """Shared row-walking core for parse_portfolio_xlsx and parse_portfolio_xls — everything
+    from here down operates on a plain list[tuple] and has no idea which spreadsheet library
+    or file format produced it."""
+    result = PortfolioParseResult()
     result.as_of_date_str = _find_as_of(rows)
     result.benchmark_name = _find_benchmark(rows)
 

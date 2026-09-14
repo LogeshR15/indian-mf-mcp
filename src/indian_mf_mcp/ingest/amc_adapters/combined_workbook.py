@@ -5,16 +5,59 @@ code then name; Motilal Oswal/Tata: name then code) — detected from the index 
 header row rather than assumed, same principle as the main holdings parser. Nippon India's
 Index sheet has no header row at all (just (code, name) pairs from row 0) — handled by a
 headerless fallback that recognises the shape directly.
+
+Format-agnostic: some combined-workbook AMCs' archives include genuine legacy .xls (BIFF)
+months alongside newer .xlsx ones (e.g. 360 ONE's 2018-2020 files) — sheet lookup is done via
+_open_workbook() below, which dispatches on sniff() the same way xlsx_portfolio.py's
+parse_portfolio_xlsx/parse_portfolio_xls do, so a caller doesn't need to know the format
+before asking "which sheet is this scheme in?".
 """
 from __future__ import annotations
 
 import io
+from typing import Callable
 
 import openpyxl
+import xlrd
+
+from indian_mf_mcp.parsers.sniff import FormatKind, sniff
+from indian_mf_mcp.parsers.xlsx_portfolio import xls_sheet_to_rows
 
 # A sheet code is short and has no spaces (e.g. "ME", "YO08", "144D"); a scheme name is a
 # much longer free-text string. Used only when no header row can be found at all.
 _MAX_CODE_LEN = 10
+
+
+def _open_workbook(raw: bytes) -> tuple[list[str], Callable[..., list[tuple]]] | None:
+    """Returns (sheet_names, rows_for), where rows_for(name, limit=None) reads a sheet's rows
+    (optionally just the first `limit` of them — find_sheet_by_title only ever needs row 1,
+    and re-reading every row of every sheet in a large combined workbook just to check its
+    title would be a real performance regression, so the row-1-only optimisation the openpyxl
+    read_only iterator gave for free is preserved explicitly here). Returns None if the format
+    isn't one either parse_portfolio_xlsx or parse_portfolio_xls would accept — callers should
+    already only reach here after a format check, matching portfolio_ingest.py's own
+    sniff-then-dispatch gate, but staying honest (None, not an exception) if that changes."""
+    fmt = sniff(raw)
+    if fmt == FormatKind.XLSX:
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+
+        def rows_for_xlsx(name: str, limit: int | None = None) -> list[tuple]:
+            ws = wb[name]
+            if limit is not None:
+                return list(ws.iter_rows(max_row=limit, values_only=True))
+            return list(ws.iter_rows(values_only=True))
+
+        return wb.sheetnames, rows_for_xlsx
+    if fmt == FormatKind.XLS_BIFF:
+        wb = xlrd.open_workbook(file_contents=raw)
+        names = wb.sheet_names()
+
+        def rows_for_xls(name: str, limit: int | None = None) -> list[tuple]:
+            all_rows = xls_sheet_to_rows(wb.sheet_by_name(name))
+            return all_rows[:limit] if limit is not None else all_rows
+
+        return names, rows_for_xls
+    return None
 
 
 def _match(rows, header_idx, name_col, code_col, scheme_hint) -> str | None:
@@ -35,10 +78,13 @@ def _match(rows, header_idx, name_col, code_col, scheme_hint) -> str | None:
 
 
 def find_sheet_code(raw: bytes, scheme_hint: str, index_sheet_name: str = "Index") -> str | None:
-    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-    if index_sheet_name not in wb.sheetnames:
+    opened = _open_workbook(raw)
+    if opened is None:
         return None
-    rows = list(wb[index_sheet_name].iter_rows(values_only=True))
+    sheet_names, rows_for = opened
+    if index_sheet_name not in sheet_names:
+        return None
+    rows = rows_for(index_sheet_name)
 
     name_col = code_col = None
     header_idx = None
@@ -71,17 +117,19 @@ def find_sheet_by_title(raw: bytes, scheme_hint: str, exclude_sheet_names: tuple
     sheet name itself IS the per-scheme code, and each sheet's own row 1 carries the full
     scheme name in its own first populated cell. Scans every sheet's title row instead of a
     shared lookup table."""
-    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    opened = _open_workbook(raw)
+    if opened is None:
+        return None
+    sheet_names, rows_for = opened
     target = scheme_hint.strip().lower()
     best = None
-    for sheet_name in wb.sheetnames:
+    for sheet_name in sheet_names:
         if sheet_name in exclude_sheet_names:
             continue
-        ws = wb[sheet_name]
-        try:
-            row0 = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-        except StopIteration:
+        rows = rows_for(sheet_name, limit=1)
+        if not rows:
             continue
+        row0 = rows[0]
         title = next((c for c in row0 if isinstance(c, str) and c.strip()), None)
         if title is None:
             continue
