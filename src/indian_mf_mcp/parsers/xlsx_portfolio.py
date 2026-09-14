@@ -412,7 +412,9 @@ def parse_portfolio_xlsx(raw: bytes, sheet_name: str | None = None) -> Portfolio
                 d.pct_to_aum = d.pct_to_aum / scale
 
     if result.grand_total_pct_nav is not None:
-        result.reconciliation_ok = abs(result.grand_total_pct_nav - 1.0) <= 0.01
+        # spec §7: sum of "% to Net Assets" must land within ~0.5% of 100 or the snapshot
+        # is flagged rather than silently served as reconciled.
+        result.reconciliation_ok = abs(result.grand_total_pct_nav - 1.0) <= 0.005
     else:
         result.reconciliation_ok = None
         result.warnings.append("GRAND TOTAL row not found; cannot verify 100% reconciliation")
