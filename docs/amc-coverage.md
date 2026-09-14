@@ -79,22 +79,26 @@ every entry below as a snapshot of one investigation, not a settled fact.
     discovery call instead of hardcoding a map; its filenames also omit the "Taurus" prefix,
     so scheme-hint matching has to be bidirectional — the one-directional check `union.py`
     uses would silently return zero documents.
-  - **Ten AMCs remain blocked, down from fifteen — and five of those fifteen were
-    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential and quant are all live as
-    of 2026-09-13 (details below). That is a 1-in-3 error rate in the original triage, and the
-    errors were not random: each came from testing the wrong surface. HDFC and Kotak were
+  - **Nine AMCs remain blocked, down from fifteen — and six of those fifteen were
+    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential, quant and Invesco are all
+    live as of 2026-09-14 (details below). That is a 40% error rate in the original triage, and
+    the errors were not random: each came from testing the wrong surface. HDFC and Kotak were
     judged on their *investor portals* rather than their file hosts; Axis was judged on a
     *browser route* that was never required; quant was judged on the *wrong page*, one whose
     content is click-gated; ICICI was judged on an anti-bot script that only ever guarded the
-    SPA shell. **The portal is not the product.** Every verdict below was reached the same way
-    and none should be trusted until re-tested against the file host, any static JS asset the
-    site already serves, and AMFI's own registered URL.
+    SPA shell; Invesco was judged on a WAF verdict that does not reproduce against the current
+    site at all (see below — possibly a stale verdict from before a site rebuild, or a
+    mis-attribution from its sibling entry, WhiteOak Capital). **The portal is not the
+    product.** Every verdict below was reached the same way and none should be trusted until
+    re-tested against the file host, any static JS asset the site already serves, and AMFI's
+    own registered URL.
   - **Still blocked, by failure mode:**
-    - *Commercial WAF on the whole domain* — **Invesco** and **WhiteOak Capital**
-      (CloudFront/AWS-WAF; Invesco's India business may also have been rebranded, possibly
-      making it moot). **Edelweiss** was re-tested live 2026-09-14, specifically looking for
-      the HDFC/Kotak-style portal/file-host split — see its own entry below; the split does
-      not hold here and the verdict stands as blocked, but with much better evidence now.
+    - *Commercial WAF on the whole domain* — **WhiteOak Capital** (CloudFront/AWS-WAF).
+      **Invesco** was removed from this entry 2026-09-14 — it's live now, see below.
+      **Edelweiss** was re-tested live 2026-09-14, specifically looking for the HDFC/Kotak-style
+      portal/file-host split — see its own entry below; the split does not hold here and the
+      verdict stands as blocked, but with much better evidence now. Worth re-testing WhiteOak
+      the same way, since it shared this entry with an AMC whose verdict didn't hold up.
     - *Headless-JS fingerprinting* — **PGIM India**: the real API is same-origin but reachable
       only after client-side JS the site fingerprints and blocks in Playwright. Worth
       re-testing the way Axis was solved — by reading its bundled JS for the request shape
@@ -378,7 +382,40 @@ every entry below as a snapshot of one investigation, not a settled fact.
     explicitly rather than reusing `find_sheet_by_title`, whose first-string-cell heuristic
     would happily pick up the corruption. A useful reminder that the shared heuristics are
     conveniences, not invariants.
-  - The remaining ~21 AMCs haven't been attempted yet. This is real, per-AMC engineering
+  - **Invesco moved from "blocked (commercial WAF)" to live, and neither half of the old
+    verdict held up on re-test 2026-09-14.** First, entity status: Invesco Asset Management
+    (India) is not defunct or renamed. Religare Invesco (2013) became Invesco Asset Management
+    after Invesco bought out Religare's stake (2015-16); in April 2024 Hinduja Group's IndusInd
+    International Holdings acquired a 60% stake, becoming joint sponsor alongside the
+    US-based Invesco (regulatory approvals completed by late 2025) — no renaming of the AMC or
+    its schemes has happened, and every document on the live site is still branded "Invesco
+    India ...". Second, the WAF itself: `www.invescomutualfund.com` returns a clean `200` to
+    the honest User-Agent on the bare homepage and every path tried — no CloudFront/AWS-WAF
+    challenge anywhere, contradicting the recorded verdict outright (most likely stale, from
+    before the site's Next.js rebuild, or mis-attributed from its sibling entry, WhiteOak
+    Capital, which shared the same line in this doc). What *is* stale is AMFI's own registered
+    URL: `.../literature-and-form?tab=Statutory` 301-redirects to
+    `/literature-forms/forms/application`, silently dropping the `tab` query string, because
+    the old query-param route no longer exists on the rebuilt site — AMFI is simply pointing at
+    a dead convention. Discovery needed one build-time browser network capture (never used at
+    runtime) of the live site's own "Monthly Holdings" tab, which turned up a same-origin JSON
+    listing API needing no scheme-name guessing at all:
+    `GET /api/CompleteMonthlyHoldings?year=<YYYY>&classification=<equity|fixed-income|hybrid|
+    fund-of-funds|exchange-traded-fund|index-funds|fixed-maturity-plans>`, one call per
+    (year, classification) returning *every* scheme in that category for that year, each with
+    twelve direct, already-versioned, already-fetchable `.xlsx` URLs (Jan-Dec) on
+    `www.invescomutualfund.com`'s own CMS document-library path — no separate CDN/S3 host at
+    all, unlike HDFC/Kotak. Verified back to 2012 (`year=0` lists every year with data,
+    2012-2026); the legacy-`.xls`-to-real-`.xlsx` transition happens between 2020 and 2021.
+    One file per scheme per month, zero shared-parser changes: the August 2026 Invesco India
+    ELSS Tax Saver Fund file reconciles at exact 100%, 80 of 93 parsed rows carrying a real
+    ISIN (the rest are harmless footer pseudo-rows the shared parser's stop-markers don't yet
+    recognise for this AMC's footer wording — they carry no weight, so reconciliation is
+    unaffected and the shared parser was left alone per this project's rule). Also worth
+    noting: the "Monthly Holdings" category is a genuine, separate tab from "Fortnightly
+    Holdings" and "Half Yearly Holdings" on the live site — the AMFI-registered URLs that only
+    named the latter two undersold what the AMC actually publishes.
+  - The remaining ~20 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
     different AMC layouts, and the failure modes for the rest are now well-characterized
