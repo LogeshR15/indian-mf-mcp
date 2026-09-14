@@ -116,9 +116,44 @@ every entry below as a snapshot of one investigation, not a settled fact.
       User-Agent while accepting a spoofed browser one. Asked the user rather than deciding
       unilaterally; **the decision was to skip it** and keep spec.md's honest-UA policy intact.
       This is the one entry that is a choice rather than an obstacle.
-    - *Sandbox artifact, not a real blocker* — **Aditya Birla**'s discovery endpoint is found
-      and documented; its file host is blocked by *this sandbox's* network policy and should
-      work in a normal environment.
+    - *AMC's own infrastructure is dead, not a control* — **Aditya Birla Sun Life**. This entry
+      previously read "sandbox artifact, not a real blocker" — that was itself wrong, and it's
+      worth recording why, because it's an object lesson in verifying rather than trusting a
+      one-line prior note. Re-tested live 2026-09-14: it is not the sandbox, and it is not a
+      control at all — ABSL's download infrastructure is genuinely dead, for everyone, and has
+      been for a year and a half. AMFI's registered listing page,
+      `mutualfund.adityabirlacapital.com/forms-and-downloads/portfolio`, loads cleanly (`200`,
+      honest UA, no WAF, no SPA) and is plain server-rendered HTML whose "Monthly Portfolio"
+      accordion tab carries its own backing call right in the markup:
+      `data-accordian-api="/postlogin/CustomApi/Resources/FactsheetAccordionById?id=<guid>&ctype=<encoded-sitecore-path>"`.
+      The site's own `global.js` (`resourceAccordianAjax()`) appends `&month= &year=0` before
+      calling it — that literal space before the `&` is not a typo introduced here, it's copied
+      verbatim from the site's own code, and the call `500`s without it. No auth, no encryption,
+      no browser: one `GET` returns the AMC's entire monthly-portfolio archive — 211 entries,
+      March 2009 through August 2026 — as clean JSON, `{ResourceLink, pdfUrl}` pairs with a
+      human-readable as-of date already sitting in `ResourceLink` text (e.g. "Monthly Portfolios
+      as on August 31, 2026"), no pagination needed. The same shape, same completeness, same
+      one-call archive applies to Half Yearly (42 entries, its own guid) and Fortnightly (142
+      entries) categories, and to unrelated resource types tried for comparison (e.g. "Monthly
+      Scheme Performance"). Every `pdfUrl` returned, across every category tried with no
+      exception, points at `https://abcscprod.azureedge.net/...` — and that hostname is
+      `NXDOMAIN`. Confirmed authoritatively, not just against this sandbox's resolver: `dig`
+      against it returns `status: NXDOMAIN` with the `SOA` in the authority section naming
+      `ns1-06.azure-dns.com` — i.e. Azure's own DNS infrastructure is the one asserting the name
+      doesn't exist, for `A`, `AAAA` and `CNAME` alike. This lines up exactly with Microsoft's
+      published retirement of "Azure CDN from Edgio" (the classic `azureedge.net` product),
+      retired 2025-01-15; ABSL built its resource library on that CDN and evidently never
+      migrated off it, so every download link on its live production site — including the one
+      its own `/shareresource` "preview/share" page serves for the same file — has been quietly
+      404-by-DNS for well over a year. (For comparison, this project's other CDN-hosted AMCs —
+      `files.hdfcfund.com`, `vatseelabs-s3.kotakmf.com` — both resolve and serve fine through
+      this same sandbox and proxy, which is what rules out a local network-policy explanation
+      here.) This is categorically different from every other entry on this page: there is no
+      access control to evade, honestly or otherwise — there is simply no server answering the
+      only URL the AMC itself publishes. No adapter is shipped, because there is no fetchable
+      file to golden-test a parser against. If ABSL ever migrates its CDN, revisit from the
+      accordion API documented above, which needs no rediscovery — only the dead hostname would
+      need replacing.
     - **Edelweiss confirmed still blocked, re-tested 2026-09-14 — and it is a harder case
       than HDFC or Kotak, not a repeat of either.** Both of those turned out to be portal-only
       blocks with an unblocked file host one hop away; Edelweiss was re-tested specifically
