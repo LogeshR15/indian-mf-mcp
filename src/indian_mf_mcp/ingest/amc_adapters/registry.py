@@ -26,6 +26,7 @@ from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTemplet
 from indian_mf_mcp.ingest.amc_adapters.groww import GrowwAdapter
 from indian_mf_mcp.ingest.amc_adapters.hdfc import HDFCAdapter
 from indian_mf_mcp.ingest.amc_adapters.icici_prudential import ICICIPrudentialAdapter
+from indian_mf_mcp.ingest.amc_adapters.iti import ITIAdapter
 from indian_mf_mcp.ingest.amc_adapters.kotak import KotakAdapter
 from indian_mf_mcp.ingest.amc_adapters.lic import LicAdapter
 from indian_mf_mcp.ingest.amc_adapters.mirae import MiraeAdapter
@@ -95,6 +96,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     # One Bajaj sheet has a corrupted code cell in column 0, so it resolves on
     # column 1 rather than find_sheet_by_title's first-string-cell heuristic.
     "bajaj-finserv": (BajajFinservAdapter, _bajaj_sheet_resolver),
+    "iti": (ITIAdapter, combined_workbook.find_sheet_code),
 }
 
 
