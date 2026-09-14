@@ -40,15 +40,23 @@ FOOTER_STOP_MARKERS = (
     "sip investment performance", "quantitative indicators", "this product is suitable",
     "total below investment grade", "details of intra scheme investments",
     "hedging positions", "nav as on",
+    # HSBC's debt-scheme files print these two quant-indicator lines loose, with no
+    # "Quantitative Indicators" section header above them to trip the existing marker.
+    "annualised portfolio ytm", "macaulay duration",
 )
 
 # Some AMCs (Tata) label the true fund-level 100% total "NET ASSETS" rather than "GRAND
 # TOTAL" or anything containing the word "total" at all — must be recognised explicitly or
-# it falls through as a spurious duplicate holding worth ~100% of NAV.
+# it falls through as a spurious duplicate holding worth ~100% of NAV. HSBC suffixes its own
+# version with the as-of date ("Total Net Assets as on 31-August-2026"), so this is matched as
+# a prefix, not an exact label — a plain "total"-containing row would otherwise be discarded
+# by the aggregate-row skip below with no total ever recorded.
 _EXPLICIT_GRAND_TOTAL_LABELS = {"net assets", "total net assets"}
 
-AS_OF_RE = re.compile(r"as on\s+([A-Za-z]+ \d{1,2},?\s*\d{4})", re.IGNORECASE)
-AS_OF_NUMERIC_RE = re.compile(r"as on\s+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})", re.IGNORECASE)
+# HSBC's own title cell says "as of" rather than every other AMC's "as on" — a wording
+# variant, so it is accepted alongside "as on" rather than handled per-AMC.
+AS_OF_RE = re.compile(r"as o[nf]\s+([A-Za-z]+ \d{1,2},?\s*\d{4})", re.IGNORECASE)
+AS_OF_NUMERIC_RE = re.compile(r"as o[nf]\s+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})", re.IGNORECASE)
 BENCHMARK_RE = re.compile(r"\(([A-Za-z0-9&/ ]*\bTRI\b[A-Za-z0-9&/ ]*)\)")
 
 
@@ -160,7 +168,12 @@ def _find_main_header_row(rows: list[tuple]) -> tuple[int, ColumnMap] | None:
 
         name_col = find("name of the instrument", "name of instrument", "instrument name")
         isin_col = find("isin")
-        pct_col = find("% to net", "% to aum", "% to nav", "% of net")
+        # HSBC spells this out in full ("Percentage to Net Assets") instead of using the "%"
+        # symbol every other AMC observed so far uses — a wording variant, not a layout quirk,
+        # so it belongs here alongside the other synonyms rather than in HSBC's own adapter.
+        pct_col = find("% to net", "% to aum", "% to nav", "% of net",
+                        "percentage to net", "percentage to aum", "percentage to nav",
+                        "percentage of net")
         if name_col is None or isin_col is None or pct_col is None:
             continue
         industry_col = find("industry", "rating")
@@ -289,8 +302,18 @@ def parse_portfolio_xlsx(raw: bytes, sheet_name: str | None = None) -> Portfolio
         if label and any(label.lower().startswith(m) for m in FOOTER_STOP_MARKERS):
             break
 
+        # SEBI's mandated scheme-riskometer block (added across many AMCs' files) repeats the
+        # scheme's own name as a row label with "Scheme Riskometer" / "Scheme Benchmark
+        # Riskometer" in the industry/value columns instead of real holding data — the
+        # scheme-name label defeats FOOTER_STOP_MARKERS (it never starts with a known phrase),
+        # so it must be caught on the industry column's own fixed text instead (HSBC: this
+        # follows directly after the GRAND TOTAL row with nothing valid after it).
+        if isinstance(col_d, str) and "riskometer" in col_d.lower():
+            break
+
         if label and (label.strip().lower().startswith("grand total")
-                      or label.strip().lower() in _EXPLICIT_GRAND_TOTAL_LABELS):
+                      or any(label.strip().lower().startswith(t)
+                             for t in _EXPLICIT_GRAND_TOTAL_LABELS)):
             result.grand_total_market_value = _num(col_f)
             result.grand_total_pct_nav = _num(col_g)
             continue

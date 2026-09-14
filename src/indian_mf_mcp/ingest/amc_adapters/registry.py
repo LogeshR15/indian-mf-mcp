@@ -27,6 +27,7 @@ from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
 from indian_mf_mcp.ingest.amc_adapters.franklin_templeton import FranklinTempletonAdapter
 from indian_mf_mcp.ingest.amc_adapters.groww import GrowwAdapter
 from indian_mf_mcp.ingest.amc_adapters.hdfc import HDFCAdapter
+from indian_mf_mcp.ingest.amc_adapters.hsbc import HSBCAdapter
 from indian_mf_mcp.ingest.amc_adapters.icici_prudential import ICICIPrudentialAdapter
 from indian_mf_mcp.ingest.amc_adapters.invesco import InvescoAdapter
 from indian_mf_mcp.ingest.amc_adapters.iti import ITIAdapter
@@ -107,6 +108,7 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     # older files and the Equity Hybrid Fund workbook are still surfaced and fall out via the
     # existing skipped_reconciliation_failed / skipped_sheet_not_found gates.
     "bandhan": (BandhanAdapter, _bandhan_sheet_resolver),
+    "hsbc": (HSBCAdapter, None),
 }
 
 

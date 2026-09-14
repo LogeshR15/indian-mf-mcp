@@ -36,9 +36,10 @@ every entry below as a snapshot of one investigation, not a settled fact.
 - **Phase 2 (portfolio spine):** live AMC portfolio XLSX parsing with 100%-reconciliation
   gating, ISIN-keyed change engine (corporate-action flagging, price/flow drift detection),
   holding persistence, concentration, and `get_fund_portfolio`.
-  - **AMC coverage today (22): Axis, Bank of India, Baroda BNP Paribas, DSP, Franklin
-    Templeton, HDFC, ICICI Prudential, Kotak Mahindra, LIC, Mirae Asset, Motilal Oswal, Navi,
-    Nippon India, PPFAS, quant, SBI, Sundaram, Tata, Taurus, Union, UTI, and Zerodha** (see
+  - **AMC coverage today (29): 360 ONE, Axis, Bajaj Finserv, Bank of India, Baroda BNP Paribas,
+    DSP, Franklin Templeton, Groww, HDFC, HSBC, ICICI Prudential, ITI, Kotak Mahindra, LIC,
+    Mirae Asset, Motilal Oswal, Navi, Nippon India, PPFAS, quant, Quantum, SBI, Sundaram, Tata,
+    Taurus, Trust, Union, UTI, and Zerodha** (see
     `ingest/amc_adapters/registry.py`), each verified live end-to-end with its own golden
     fixture test. Adding an AMC means (1) a real, live-verified way to discover its monthly
     portfolio files — a static link, or a documented backing endpoint found via a one-time
@@ -79,20 +80,25 @@ every entry below as a snapshot of one investigation, not a settled fact.
     discovery call instead of hardcoding a map; its filenames also omit the "Taurus" prefix,
     so scheme-hint matching has to be bidirectional — the one-directional check `union.py`
     uses would silently return zero documents.
-  - **Eight AMCs remain blocked, down from fifteen — and seven of those fifteen were
-    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential, quant, Invesco and Bandhan
-    are all live as of 2026-09-14 (details below). That is a 47% error rate in the original
-    triage, and the errors were not random: each came from testing the wrong surface. HDFC and
-    Kotak were judged on their *investor portals* rather than their file hosts; Axis was judged
-    on a *browser route* that was never required; quant was judged on the *wrong page*, one
-    whose content is click-gated; ICICI was judged on an anti-bot script that only ever guarded
-    the SPA shell; Invesco was judged on a WAF verdict that does not reproduce against the
-    current site at all (possibly a stale verdict from before a site rebuild, or a
-    mis-attribution from its sibling entry, WhiteOak Capital); Bandhan was judged on its
-    encrypted transactional API without checking whether a separate plaintext tier existed
-    alongside it. **The portal is not the product.** Every verdict below was reached the same
-    way and none should be trusted until re-tested against the file host, any static JS asset
-    the site already serves, and AMFI's own registered URL.
+  - **Seven AMCs remain blocked, down from fifteen — and eight of those fifteen were
+    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential and quant were live as of
+    2026-09-13, and Invesco, Bandhan and HSBC joined them live as of 2026-09-14 (details below).
+    That is a 53% error rate in the original triage, and the errors were not random: each came
+    from testing the wrong surface, or simply not testing the right one. HDFC and Kotak were
+    judged on their *investor portals* rather than their file hosts; Axis was judged on a
+    *browser route* that was never required; quant was judged on the *wrong page*, one whose
+    content is click-gated; ICICI was judged on an anti-bot script that only ever guarded the
+    SPA shell; Invesco was judged on a WAF verdict that does not reproduce against the current
+    site at all (possibly a stale verdict from before a site rebuild, or a mis-attribution from
+    its sibling entry, WhiteOak Capital); Bandhan was judged on its encrypted transactional API
+    without checking whether a separate plaintext tier existed alongside it; HSBC was judged on
+    AMFI's own registered URL, which — unusually — turned out to be a real, working,
+    server-rendered page that simply does not carry the monthly portfolio disclosure at all; the
+    actual archive lives one click away, on a page AMFI never registers. **The portal is not the
+    product, and neither is the page a regulator happens to link.** Every verdict below was
+    reached the same way and none should be trusted until re-tested against the file host, any
+    static JS asset the site already serves, AMFI's own registered URL, and that URL's own site
+    navigation for a sibling page the registry doesn't know about.
   - **Still blocked, by failure mode:**
     - *Commercial WAF on the whole domain* — **WhiteOak Capital** (CloudFront/AWS-WAF).
       **Invesco** was removed from this entry 2026-09-14 — it's live now, see below.
@@ -104,8 +110,6 @@ every entry below as a snapshot of one investigation, not a settled fact.
       only after client-side JS the site fingerprints and blocks in Playwright. Worth
       re-testing the way Axis was solved — by reading its bundled JS for the request shape
       instead of driving a browser at all.
-    - *No discoverable disclosure page* — **HSBC**. AMFI does register a URL for it, which the
-      original attempt may not have had.
     - *Application-layer payload encryption* — **JM Financial** and **Mahindra Manulife** both
       return a real `200 OK` whose `{"data"/"payload": "<base64>"}` body decodes to
       high-entropy ciphertext rather than JSON. Replaying a captured request fails; decrypting
@@ -459,6 +463,50 @@ every entry below as a snapshot of one investigation, not a settled fact.
     a few days short of it, e.g. "26 February 2021" — a last-business-day filing, not month-
     end) — extracted by searching for the number preceding whichever month token appears,
     verified against all 124 real entries in the live archive with zero fallback needed.
+  - **HSBC was live all along; the recorded "no discoverable disclosure page" verdict came
+    from stopping at AMFI's own registered URL instead of the site's own navigation.** AMFI's
+    registry names `investor-resources` (plus `Doc=fund-factsheets`/`Doc=other-disclosures`
+    query-string variants) for this AMC — and that page really is plain, unblocked,
+    server-rendered HTML carrying its entire document archive inline (~4,000 PDFs + ~350 XLSX,
+    one page load, no pagination). The catch: none of the registered `Doc=` values do anything
+    (the page ignores its own query string server-side and always renders the same full,
+    unfiltered list — confirmed zero `Doc=`/`module-17` references anywhere in the response),
+    and more importantly **the SEBI-mandated monthly portfolio holdings XLSX simply is not on
+    this page** — its "Portfolios" category is ad-hoc PDFs (weekly debt summaries, half-yearly
+    statements), and its "Fund factsheets" category is the glossy PDF factsheet, not the
+    regulatory holdings statement. The real archive sits one click away, on a sibling page
+    linked from the site's own primary navigation but never surfaced in AMFI's registry:
+    `investor-resources/information-library`, whose "Fund portfolios" accordion section is a
+    plain HTML `<table>` — one `<a href title>` per (scheme, month), ~2,200 links, the entire
+    archive in one page load, the same "whole archive server-rendered inline" shape as
+    Zerodha/Trust/360 ONE just via a plain table instead of a JS data blob. Files are Sitecore
+    media-library paths on the AMC's own host (no separate CDN), rendered inconsistently with
+    or without a leading slash and with inconsistent casing — both resolve identically once
+    normalised. As-of dates come from each link's own `title` text (`"as on 31 August 2023"`,
+    or no "as on" at all in newer rows), never from the URL: the folder-ID-shaped path segment
+    in front of recent filenames (`document-DDMMYYYY/`) is an upload-batch ID, not the as-of
+    date — ground-truthed by a folder stamped `document-07032023` containing a file titled
+    "... as on 31 August 2023". **Real capability limit, not a bug:** HSBC renamed several
+    schemes along the way ("Flexi Cap Equity Fund" → "Flexi Cap Fund" among others), and
+    `scheme_hint` matching only reaches the current name — for HSBC Flexi Cap Fund that means
+    46 months, November 2022 (the rename month) through August 2026, even though the archive's
+    older, differently-named files for the same scheme reach back to October 2021. Three
+    genuinely general parser gaps surfaced and were fixed in `xlsx_portfolio.py` rather than
+    patched locally, since none of them are HSBC-specific hacks: HSBC spells its %-column out
+    in full ("Percentage to Net Assets") instead of using "%", a wording variant added
+    alongside the existing needles; its grand-total row reads "Total Net Assets as on
+    31-August-2026" (a date-suffixed variant of the exact-match "total net assets"/"net assets"
+    labels Tata needed), now matched as a prefix instead of an exact string; and its
+    SEBI-mandated "Scheme Riskometer" footer block repeats the scheme's own name as a row label
+    (with "Scheme Riskometer" only in the *industry* column), which defeats every
+    prefix-based `FOOTER_STOP_MARKERS` check and previously leaked into holdings as a spurious
+    entry — caught instead on the industry column's own fixed "riskometer" text; debt-scheme
+    files also print two loose quant-indicator lines ("Annualised Portfolio YTM !", "Macaulay
+    Duration") with no section header above them, added to the same marker list directly.
+    Verified live across three files — HSBC Flexi Cap Fund August 2026 (85 holdings) and
+    January 2022 (52 holdings, percentage-point scale correctly normalised), and HSBC
+    Corporate Bond Fund August 2026 (83 holdings) — all reconciling to exact 100%, with the
+    full test suite re-run clean after each parser change to confirm no other AMC regressed.
   - The remaining ~20 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
