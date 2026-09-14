@@ -33,9 +33,31 @@ every entry below as a snapshot of one investigation, not a settled fact.
     unlike the daily snapshot's point-in-time taxonomy, it stays re-derivable on demand.
     Scheme codes not already known from the daily ingest are counted and skipped, never
     turned into half-populated scheme rows.
-- **Phase 2 (portfolio spine):** live AMC portfolio XLSX parsing with 100%-reconciliation
-  gating, ISIN-keyed change engine (corporate-action flagging, price/flow drift detection),
-  holding persistence, concentration, and `get_fund_portfolio`.
+- **Phase 2 (portfolio spine):** live AMC portfolio XLSX **and legacy XLS (BIFF)** parsing
+  with 100%-reconciliation gating, ISIN-keyed change engine (corporate-action flagging,
+  price/flow drift detection), holding persistence, concentration, and `get_fund_portfolio`.
+  - **Legacy `.xls` (BIFF) parsing added**, per spec §7's explicit call for it (`xlrd>=2.0`,
+    which dropped `.xlsx` support entirely and now reads only `.xls` — the project's existing
+    dependency pin was already the right one). `parse_portfolio_xls()` shares its entire
+    row-walking core with `parse_portfolio_xlsx()`; only raw-bytes-to-rows extraction differs
+    by format. `combined_workbook.find_sheet_code`/`find_sheet_by_title` were made
+    format-agnostic the same way, since several combined-workbook AMCs' older archives are
+    real `.xls`. Verified live against two AMCs' genuine historical files, not just a
+    synthetic fixture: **360 ONE**'s full 2018-2026 archive now ingests 103/104 documents
+    (previously `skipped_format` for every 2018-2020 month) with zero reconciliation
+    failures; **Bank of India**'s 2021-era `.xls` months (previously excluded by an
+    extension-only discovery filter) now ingest cleanly too (56/79 documents; the remainder
+    are genuine sheet-not-found gaps, unrelated to format). A real correctness gap this work
+    surfaced and closed: a one-file-per-scheme adapter (`sheet_resolver=None`) that receives
+    an actual multi-sheet combined workbook — which some AMCs' older archives quietly switch
+    to (Navi's pre-2021 months are exactly this shape) — no longer silently parses "sheet 0"
+    and risks attributing a different scheme's holdings to the wrong scheme_id;
+    `ingest_scheme_portfolios` now detects this (`PortfolioParseResult.sheet_count > 1` with
+    no resolver configured) and flags it as `skipped_ambiguous_multi_sheet`, archiving the
+    raw bytes without persisting an unverified snapshot. PDF-only portfolio disclosures
+    remain out of scope — spec §7's parsing table only ever called for PDF extraction on
+    SIDs/KIM/factsheets/addenda (already covered by `get_document`), never on portfolio
+    holdings tables.
   - **AMC coverage today (31): 360 ONE, Axis, Bajaj Finserv, Bandhan, Bank of India, Baroda BNP
     Paribas, DSP, Franklin Templeton, Groww, HDFC, HSBC, ICICI Prudential, Invesco, ITI, Kotak
     Mahindra, LIC, Mirae Asset, Motilal Oswal, Navi, Nippon India, PPFAS, quant, Quantum, SBI,

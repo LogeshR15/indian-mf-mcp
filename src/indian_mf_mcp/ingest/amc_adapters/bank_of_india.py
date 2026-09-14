@@ -37,9 +37,13 @@ The `GetDocuments` listing also mixes in legacy/ad-hoc entries going back to 201
 (legacy BIFF, pre-2021), `.xlsb`, `.pdf` liquid-fund ad-hoc disclosures, and one-off titles
 with no parseable date ("PORTFOLIO - SMALL CAP FUND", "MARCH 17 - BOI AXA CORPORATE CREDIT
 SPECTRUM FUND", etc. — mostly pre-2021, from when the AMC was still "BOI AXA Mutual Fund").
-This adapter only surfaces `.xlsx` entries whose title yields a parseable
-day/month-name/year; anything else (including all `.xls`/`.xlsb`/`.pdf`) is silently skipped
-(non-xlsx would be rejected downstream by `sniff()` anyway) rather than guessed at.
+This adapter surfaces both `.xlsx` and `.xls` entries whose title yields a parseable
+day/month-name/year — verified live: the Sep-2021 combined workbook is real legacy BIFF
+(`sniff()` reports `XLS_BIFF`), resolves via the same `find_sheet_code` Index-sheet lookup
+with zero changes, and parses at exact 100% reconciliation (79 holdings, Flexi Cap Fund /
+`YB36`) via `parse_portfolio_xls`. `.xlsb` (a different binary container neither openpyxl nor
+xlrd read) and `.pdf` entries, plus titles with no parseable date, remain genuinely
+unparseable and are still silently skipped rather than guessed at.
 """
 from __future__ import annotations
 
@@ -87,8 +91,8 @@ class BankOfIndiaAdapter:
             if not url:
                 continue
             url_path = url.split("?")[0]
-            if not url_path.lower().endswith(".xlsx"):
-                continue  # skip legacy .xls/.xlsb and ad-hoc .pdf entries
+            if not url_path.lower().endswith((".xlsx", ".xls")):
+                continue  # .xlsb and ad-hoc .pdf entries remain genuinely unparseable
             name = doc.get("DocName") or ""
             m = _DATE_RE.search(name)
             if not m:

@@ -81,16 +81,19 @@ detects format from magic bytes rather than trusting the extension/Content-Type 
 `fetch()` here does no extension-based filtering at all; every listed URL is returned and left
 to the shared `ingest_scheme_portfolios` pipeline to sniff and skip if unparseable.
 
-**Genuinely legacy files exist and are correctly left unparsed, not a bug.** Every file from
-"Monthly Portfolio 2020" and earlier (through 2018) is real legacy BIFF (`D0 CF 11 E0`
-compound-document magic, confirmed on the January 2018 file, whose OLE metadata even records
-the original author and IIFL-era filenames like "IIFLAMC_MF_Portfolio_Jan_2018_download..." —
-IIFL Asset Management was 360 ONE's name before its 2023 rebrand). `sniff()` correctly reports
-these as `XLS_BIFF`, and `portfolio_ingest.py` correctly counts them as `skipped_format` rather
-than guessing at their contents; this project has no BIFF parser yet, so effective usable
-history through this adapter runs from 2021 onward (2021-2023 mix `.xlsx`/mislabeled-`.xlsx`
-files with a handful of true `.xls` stragglers; 2018-2020 is all true legacy `.xls`). This is a
-real, current capability limit of the shared pipeline, not something specific to 360 ONE.
+**Genuinely legacy files exist and are correctly parsed via parse_portfolio_xls, not skipped.**
+Every file from "Monthly Portfolio 2020" and earlier (through 2018) is real legacy BIFF
+(`D0 CF 11 E0` compound-document magic, confirmed on the January 2018 file, whose OLE metadata
+even records the original author and IIFL-era filenames like
+"IIFLAMC_MF_Portfolio_Jan_2018_download..." — IIFL Asset Management was 360 ONE's name before
+its 2023 rebrand). `sniff()` correctly reports these as `XLS_BIFF`; since parse_portfolio_xls
+and combined_workbook.find_sheet_by_title both learned to handle that format (xlrd, alongside
+openpyxl for the newer `.xlsx` months), this project's earlier "no BIFF parser yet, real
+capability limit" note no longer holds. Verified live end-to-end against this adapter's real
+archive: `ingest_scheme_portfolios` for "Dynamic Bond Fund" ingests 103 of 104 discovered
+documents back to January 2018 (the lone skip is a genuine sheet-not-found gap, not a format
+failure) — zero `skipped_format`, zero reconciliation failures, no shared-parser or
+adapter-side changes needed beyond the format-dispatch layer itself.
 
 Verified end-to-end against the real May 2026 combined workbook, "Flexicap Fund" sheet:
 `GRAND TOTAL` reconciles to exactly `1.0`, 55 holdings, header "Rounded % to Net Assets" (an
