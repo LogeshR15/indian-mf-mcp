@@ -1,4 +1,4 @@
-"""MCP server entrypoint — Phase 1+2+3 tools."""
+"""MCP server entrypoint — all six tools (Phases 1-4)."""
 from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
@@ -50,7 +50,10 @@ def get_fund_performance(
     """Complete return/risk evidence pack for one or more schemes (list = comparison).
 
     metrics: any of "trailing","rolling","risk","drawdown","stress".
-    comparators: any of "benchmark" (not yet implemented — proxy pending), "category".
+    comparators: any of "benchmark" (proxied via a passive index fund's NAV for the subset
+    of benchmarks with a configured proxy — the payload labels it `is_proxy` and names the
+    proxy fund; never presented as the licensed index itself), "category" (computed live
+    from the full ingested universe).
     Defaults to the Direct/Growth plan; a warning is included if that plan does not exist.
     Never emits a score, rating, or recommendation — only computed facts with provenance.
     """
@@ -74,12 +77,16 @@ def get_fund_portfolio(
 ) -> dict:
     """Holdings, allocations, and month-over-month change detection for one or more schemes.
 
-    sections: any of "holdings","allocations","changes","concentration","persistence".
+    sections: any of "holdings","allocations","changes","concentration","persistence","overlap".
     history: "none"|"12M"|"36M"|"60M" — required (non-"none") for the persistence table.
     compare_to: a date, "prev_month", or null to skip change detection.
     Corporate actions (splits/bonuses/mergers) are flagged, never silently asserted as trades.
-    Market-cap allocation is not yet available (requires the AMFI cap-list join) and is
-    reported as null rather than guessed. Coverage depends on which AMC adapters have been run.
+    Market-cap allocation (within "allocations") is point-in-time-safe against AMFI's
+    half-yearly cap list, version-stamped so history is never reclassified with a newer list —
+    but requires `mf-mcp update-caplist` to have populated that join; until then it's reported
+    as unavailable rather than guessed. "overlap" (only meaningful with 2+ scheme_ids) returns
+    pairwise ISIN-set intersection weighted by %NAV. Coverage depends on which AMC adapters
+    have been run.
     """
     with connect() as conn:
         return _get_fund_portfolio(
@@ -100,8 +107,9 @@ def get_fund_profile(
     sections: any of "identity","mandate","benchmark","costs","managers","documents".
     Mandate is always returned as verbatim SID excerpts with page numbers, never as parsed
     fields — investment philosophy/strategy is a document-retrieval problem, not structured
-    data (extracting it would produce confident nonsense). Managers and TER are not yet
-    available in this build and are reported as unavailable, never fabricated.
+    data (extracting it would produce confident nonsense). Managers and TER are populated
+    from ingested factsheets (`mf-mcp ingest-factsheet` / `backfill-factsheets`); until a
+    scheme's factsheets have been ingested, these report as unavailable, never fabricated.
     """
     with connect() as conn:
         return _get_fund_profile(conn, scheme_ids, as_of=as_of, sections=sections, provenance=provenance)
