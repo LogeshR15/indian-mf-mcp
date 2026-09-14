@@ -10,6 +10,7 @@ from datetime import date
 
 from indian_mf_mcp.analytics import cost as cost_mod
 from indian_mf_mcp.analytics.returns import from_rows
+from indian_mf_mcp.normalize.taxonomy import is_segregated_portfolio_name
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
 from indian_mf_mcp.store import repository as repo
 from indian_mf_mcp.store import manager_repository as mrep
@@ -28,6 +29,12 @@ def _identity(pb: ProvenanceBuilder, conn, scheme_id: str, plans) -> None:
     pb.fact("category", scheme_row["category"], src, "official")
     pb.fact("sub_category", scheme_row["sub_category"], src, "official")
     pb.fact("scheme_type", scheme_row["scheme_type"], src, "official")
+    if is_segregated_portfolio_name(scheme_row["name"]):
+        pb.fact("is_segregated_portfolio", True, src, "inferred",
+                caveat="Name-pattern match on \"Segregated Portfolio\" in the scheme name "
+                       "(spec §9.2) — a side-pocket of a parent scheme's defaulted "
+                       "exposure, not a normal standalone fund. Treat separately from the "
+                       "parent scheme; do not average it into category/peer comparisons.")
     pb.fact("active", bool(scheme_row["active"]), src, "official")
     pb.fact("inception_date", scheme_row["inception_date"], src, "official",
             caveat=None if scheme_row["inception_date"] else

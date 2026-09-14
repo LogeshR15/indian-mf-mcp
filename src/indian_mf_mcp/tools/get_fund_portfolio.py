@@ -15,7 +15,7 @@ from datetime import date, timedelta
 from indian_mf_mcp.analytics.overlap import OverlapResult, all_pairs_overlap
 from indian_mf_mcp.change_engine.concentration import concentration_stats
 from indian_mf_mcp.change_engine.persistence import compute_persistence
-from indian_mf_mcp.change_engine.portfolio_diff import diff_snapshots
+from indian_mf_mcp.change_engine.portfolio_diff import detect_disclosure_gap, diff_snapshots
 from indian_mf_mcp.ingest.amfi_caplist import compute_market_cap_allocation
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
 from indian_mf_mcp.store import portfolio_repository as prepo
@@ -192,6 +192,12 @@ def get_fund_portfolio(
                 pb.warn(f"No prior snapshot available to compare against for {scheme_id}; "
                         "'changes' section omitted rather than fabricated.")
             else:
+                gap_warning = detect_disclosure_gap(
+                    prev_snapshot["as_of_date"], snapshot["as_of_date"],
+                    prev_snapshot["disclosure_type"], snapshot["disclosure_type"],
+                )
+                if gap_warning:
+                    pb.warn(gap_warning)
                 prev_rows = prepo.get_holdings(conn, prev_snapshot["snapshot_id"])
                 change_rows = diff_snapshots(prev_rows, holdings_rows)
                 src_prev = pb.add_source(

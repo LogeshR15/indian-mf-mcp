@@ -2,6 +2,8 @@
 jumps with no real trade — asserting a trade there is a false signal (spec §9.2)."""
 from __future__ import annotations
 
+import re
+from difflib import SequenceMatcher
 from fractions import Fraction
 
 # Tolerance for treating a qty ratio as "looks like a clean corporate-action multiple"
@@ -42,3 +44,26 @@ def suspected_merger(exited_value: float | None, new_value: float | None,
     if exited_value is None or new_value is None or exited_value == 0:
         return False
     return abs((new_value / exited_value) - 1.0) < tolerance
+
+
+_NAME_SIMILARITY_THRESHOLD = 0.82
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_instrument_name(name: str) -> str:
+    return _NON_ALNUM_RE.sub(" ", name.lower()).strip()
+
+
+def suspected_isin_change(prev_name: str | None, curr_name: str | None) -> bool:
+    """A same-month EXITED + NEW pair whose instrument names are near-identical suggests an
+    ISIN change on the same underlying security (spec §9.2: "ISIN change -> False exit+entry
+    -> Name-similarity fallback matching, flagged low-confidence"), not a genuine exit
+    followed by an unrelated new purchase. Flag only — never merge the two rows, since the
+    disclosure itself reports them as distinct ISINs and this project does not silently
+    reinterpret source data."""
+    if not prev_name or not curr_name:
+        return False
+    a, b = _normalize_instrument_name(prev_name), _normalize_instrument_name(curr_name)
+    if not a or not b:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= _NAME_SIMILARITY_THRESHOLD

@@ -100,3 +100,18 @@ CATEGORY_ROLLUP = {
 
 def rollup_category(category: str) -> str:
     return CATEGORY_ROLLUP.get(category.strip(), "Other")
+
+
+_SEGREGATED_PORTFOLIO_RE = re.compile(r"\bseg(?:regated)?\.?\s*portfolio\b", re.IGNORECASE)
+
+
+def is_segregated_portfolio_name(scheme_name: str | None) -> bool:
+    """SEBI mandates a segregated (side-pocketed) portfolio be registered as its own,
+    distinct scheme, named with "Segregated Portfolio" in the scheme name itself (spec
+    §9.2: "Segregated portfolios (side-pocketing): Separate scheme codes appear; Detect and
+    surface; don't merge"). A name-pattern heuristic, not an official field — AMFI's
+    NAVAll.txt carries no dedicated segregated-portfolio flag — so this is `inferred`,
+    never `official`, wherever it feeds a provenance payload."""
+    if not scheme_name:
+        return False
+    return bool(_SEGREGATED_PORTFOLIO_RE.search(scheme_name))

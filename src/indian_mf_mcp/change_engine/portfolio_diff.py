@@ -5,10 +5,59 @@ flags[] so a corporate action or price/flow drift is never silently asserted as 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
-from indian_mf_mcp.change_engine.corporate_action import suspected_merger, suspected_split_or_bonus
+from indian_mf_mcp.change_engine.corporate_action import (
+    suspected_isin_change,
+    suspected_merger,
+    suspected_split_or_bonus,
+)
 
 _QTY_FLAT_TOLERANCE = 1e-6
+
+# Expected days between consecutive disclosures, by cadence (spec §9.2: "Fortnightly vs
+# monthly cadence" and "Late filings" / "Missing month in archive" hazards).
+_EXPECTED_GAP_DAYS = {"monthly": 31, "fortnightly": 15, "halfyearly": 182}
+_DEFAULT_EXPECTED_GAP_DAYS = 31
+_GAP_TOLERANCE_MULTIPLIER = 1.5
+
+
+def detect_disclosure_gap(
+    prev_as_of: str, curr_as_of: str,
+    prev_disclosure_type: str | None, curr_disclosure_type: str | None,
+) -> str | None:
+    """Compares the actual calendar gap between two compared snapshots against what their
+    stated disclosure cadence implies. Returns a human-readable warning when the gap is
+    wider than one ordinary filing period (a late or missing disclosure sits between them)
+    or when the two snapshots don't share a cadence; returns None for an ordinary
+    single-period gap. Purely advisory — never changes what diff_snapshots() computes, only
+    what the caller says about it. Spec §9.2: "Report the gap explicitly. Do not
+    interpolate. A 2-month change presented as a 1-month change is a lie."
+    """
+    try:
+        prev_d = date.fromisoformat(prev_as_of)
+        curr_d = date.fromisoformat(curr_as_of)
+    except (TypeError, ValueError):
+        return None
+    actual_days = (curr_d - prev_d).days
+    if actual_days <= 0:
+        return None
+
+    if prev_disclosure_type and curr_disclosure_type and prev_disclosure_type != curr_disclosure_type:
+        return (f"Compared snapshots have different disclosure cadences "
+                f"({prev_disclosure_type} -> {curr_disclosure_type}); the changes below span "
+                "a cadence switch, not one ordinary filing period.")
+
+    cadence = curr_disclosure_type or prev_disclosure_type
+    expected = _EXPECTED_GAP_DAYS.get(cadence, _DEFAULT_EXPECTED_GAP_DAYS)
+    if actual_days > expected * _GAP_TOLERANCE_MULTIPLIER:
+        periods = round(actual_days / expected)
+        return (f"{actual_days}-day gap between compared snapshots ({prev_as_of} -> "
+                f"{curr_as_of}) is wider than one expected {cadence or 'monthly'} period "
+                f"(~{expected}d) — this looks like roughly {periods} periods presented as a "
+                "single comparison, likely a missed or late disclosure in between. The diff "
+                "is not interpolated across it.")
+    return None
 
 
 @dataclass
@@ -92,12 +141,20 @@ def diff_snapshots(prev_holdings: list, curr_holdings: list) -> list[ChangeRow]:
             confidence="low" if flags else "high", flags=flags,
         ))
 
-    # Cross-check EXITED/NEW pairs in the same batch for possible mergers (similar value)
+    # Cross-check EXITED/NEW pairs in the same batch for a possible ISIN change (near-identical
+    # name -> same security under a new ISIN, spec §9.2) or merger (similar value, different
+    # names -> restructuring). Name similarity is checked first and takes precedence: a rename
+    # is a stronger, more specific explanation than "similar value" alone, and the two flags
+    # would otherwise both fire for the common case of a straight ISIN reissue.
     exited = [r for r in rows if r.action == "EXITED"]
     new = [r for r in rows if r.action == "NEW"]
     for e in exited:
         for n in new:
-            if suspected_merger(abs(e.delta_value or 0), abs(n.delta_value or 0)):
+            if suspected_isin_change(e.name, n.name):
+                e.flags.append("isin_change_suspected")
+                n.flags.append("isin_change_suspected")
+                e.confidence = n.confidence = "low"
+            elif suspected_merger(abs(e.delta_value or 0), abs(n.delta_value or 0)):
                 e.flags.append("possible_corporate_action_merger")
                 n.flags.append("possible_corporate_action_merger")
                 e.confidence = n.confidence = "low"

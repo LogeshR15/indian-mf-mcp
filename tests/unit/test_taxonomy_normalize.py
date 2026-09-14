@@ -1,4 +1,8 @@
-from indian_mf_mcp.normalize.taxonomy import parse_plan_option, parse_plan_option_columns
+from indian_mf_mcp.normalize.taxonomy import (
+    is_segregated_portfolio_name,
+    parse_plan_option,
+    parse_plan_option_columns,
+)
 
 
 def test_direct_growth():
@@ -47,3 +51,30 @@ def test_plan_option_columns_unknown_option_is_none_not_guessed():
     info = parse_plan_option_columns("Direct Plan", "Bonus Option")
     assert info.plan_type == "Direct"
     assert info.option_type is None
+
+
+# ---------------------------------------------------------------------------
+# Segregated-portfolio name detection (spec §9.2)
+# ---------------------------------------------------------------------------
+
+def test_segregated_portfolio_detected():
+    assert is_segregated_portfolio_name(
+        "Franklin India Ultra Short Bond Fund - Segregated Portfolio 1 - Direct Plan - Growth"
+    ) is True
+    assert is_segregated_portfolio_name(
+        "UTI Credit Risk Fund-Segregated Portfolio - 1 -Regular Plan-Growth"
+    ) is True
+
+
+def test_segregated_portfolio_abbreviated_form_detected():
+    assert is_segregated_portfolio_name("HDFC Credit Risk Debt Fund - Seg Portfolio 2") is True
+    assert is_segregated_portfolio_name("HDFC Credit Risk Debt Fund - Seg. Portfolio 2") is True
+
+
+def test_ordinary_scheme_name_not_flagged():
+    assert is_segregated_portfolio_name("Parag Parikh Flexi Cap Fund - Direct Plan - Growth") is False
+
+
+def test_segregated_portfolio_handles_missing_name():
+    assert is_segregated_portfolio_name(None) is False
+    assert is_segregated_portfolio_name("") is False
