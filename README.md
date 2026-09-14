@@ -31,10 +31,11 @@ the opposite instinct:
 | Tool | What it gives you |
 |---|---|
 | `resolve_fund` | Turns a messy fund name, ISIN, or scheme code into unambiguous scheme + plan identity |
-| `get_fund_performance` | Trailing and rolling returns, volatility, Sharpe/Sortino, drawdowns, stress windows |
-| `get_fund_portfolio` | Holdings, month-over-month changes, concentration, corporate-action flags |
-| `get_fund_profile` | Identity, benchmark, verbatim mandate excerpts, realised Direct-vs-Regular cost spread |
+| `get_fund_performance` | Trailing and rolling returns, volatility, Sharpe/Sortino, drawdowns, stress windows, benchmark-proxy and category comparators |
+| `get_fund_portfolio` | Holdings, month-over-month changes, concentration, persistence/conviction streaks, corporate-action flags, portfolio overlap between funds |
+| `get_fund_profile` | Identity, benchmark, verbatim mandate excerpts, TER, realised Direct-vs-Regular cost spread, current managers |
 | `get_document` | Section extraction from SIDs and other scheme PDFs |
+| `list_disclosure_events` | Detected changes over time — manager changes, TER changes, benchmark changes — each tagged by how it was detected |
 
 Always call `resolve_fund` first — Indian scheme names are genuinely ambiguous, with renames,
 near-identical names across AMCs, and 4–8 plan/option variants per scheme.
@@ -90,11 +91,12 @@ claude mcp add indian-mf -- uv run --directory /path/to/indian-mf-mcp mf-mcp ser
 
 ## AMC coverage
 
-**22 of ~53 AMCs** have working portfolio adapters:
+**27 of ~53 AMCs** have working portfolio adapters:
 
-Axis · Bank of India · Baroda BNP Paribas · DSP · Franklin Templeton · HDFC ·
-ICICI Prudential · Kotak Mahindra · LIC · Mirae Asset · Motilal Oswal · Navi · Nippon India ·
-PPFAS · quant · SBI · Sundaram · Tata · Taurus · Union · UTI · Zerodha
+360 ONE · Axis · Bajaj Finserv · Bank of India · Baroda BNP Paribas · DSP · Franklin Templeton ·
+Groww · HDFC · ICICI Prudential · Kotak Mahindra · LIC · Mirae Asset · Motilal Oswal · Navi ·
+Nippon India · PPFAS · quant · Quantum · SBI · Sundaram · Tata · Taurus · Trust · Union · UTI ·
+Zerodha
 
 NAV, scheme identity and taxonomy come from AMFI and cover **all** schemes — coverage gaps
 affect portfolio holdings only.
@@ -102,6 +104,24 @@ affect portfolio holdings only.
 Adding an AMC is the most valuable contribution you can make, and the most self-contained.
 See **[docs/amc-coverage.md](docs/amc-coverage.md)** for per-AMC discovery notes, what's still
 blocked and why, and **[CONTRIBUTING.md](CONTRIBUTING.md)** for the walkthrough.
+
+---
+
+## Known limitations
+
+In keeping with "gaps are reported, never filled," worth stating plainly here too:
+
+- **Portfolio parsing is XLSX-only for now.** A few AMCs occasionally publish legacy `.xls` or
+  PDF-only portfolios; those are detected and skipped rather than mis-parsed.
+- **Market-cap allocation (large/mid/small) isn't populated yet.** The read path is
+  version-stamped and point-in-time-safe by design, but the AMFI cap-list ingest that would
+  feed it isn't wired up, so this section currently reports unavailable.
+- **Addendum ingestion — the source of `official`-confidence change events (manager/TER/benchmark
+  changes filed as legal notices) — isn't functional yet.** `list_disclosure_events` still works
+  off `observed`-confidence events reconstructed by diffing factsheets.
+
+Neither of these is silently papered over: the affected tool responses report the gap rather
+than guessing.
 
 ---
 
@@ -117,14 +137,15 @@ AMC / AMFI PDFs ─────┘                                            �
 
 ```
 src/indian_mf_mcp/
-├── ingest/          fetching and loading
+├── ingest/          fetching and loading (NAV, portfolios, factsheets, SIDs, addenda)
 │   └── amc_adapters/   one module per AMC — the main contribution surface
-├── parsers/         AMFI delimited files, portfolio XLSX, PDF sections
+├── parsers/         AMFI delimited files, portfolio XLSX, PDF sections, format sniffing
 ├── normalize/       scheme taxonomy, plan/option parsing
-├── analytics/       returns, risk, drawdown, cost
-├── change_engine/   portfolio diffing, corporate actions, concentration
-├── store/           SQLite schema and repository
-└── tools/           the five MCP tools
+├── analytics/       returns, risk, drawdown, benchmark proxy, cost spread, overlap
+├── change_engine/   portfolio diffing, corporate actions, concentration, persistence
+├── provenance/      epistemic tags and the two-tier fact/source wrapper every tool uses
+├── store/           SQLite schema and repositories (portfolio, manager/TER, raw blob store)
+└── tools/           the six MCP tools
 ```
 
 `spec.md` holds the full architecture rationale, including which facts are deliberately *not*
