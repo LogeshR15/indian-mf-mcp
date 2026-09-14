@@ -67,6 +67,24 @@ def parse_pdf(raw: bytes) -> PdfParseResult:
                            warnings=warnings)
 
 
+def classify_parse_status(result: PdfParseResult) -> str:
+    """Maps a PdfParseResult to a document.parse_status value:
+      - 'unparseable'          the PDF failed to open, or opened with zero pages
+      - 'unparseable_scanned'  pages exist but none yielded extractable text — almost
+                                certainly a scanned/image-only document, which this project
+                                deliberately does not OCR (spec §7 MVP scope)
+      - 'parsed'                at least one page yielded text
+    A distinct, filterable status for the scanned case (rather than folding it into the
+    same generic 'unparseable' as a corrupt file) matters because it's a different, common,
+    and expected failure mode — callers may want to surface it differently to the user.
+    """
+    if not result.pages:
+        return "unparseable"
+    if result.parse_confidence == 0.0:
+        return "unparseable_scanned"
+    return "parsed"
+
+
 def find_heading_pages(result: PdfParseResult, heading: str) -> list[int]:
     return [p.page_number for p in result.pages if heading in p.headings]
 

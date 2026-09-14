@@ -200,12 +200,12 @@ class TestIngestAddendumPdf:
         ).fetchone()
         assert "fund manager" in section["text"]
 
-    def test_pdf_with_no_extractable_text_yields_zero_confidence(self):
+    def test_pdf_with_no_extractable_text_is_marked_unparseable_scanned(self):
         """A PDF whose content stream yields no text (standing in for a scanned/
-        image-only page, which parse_pdf() never OCRs per MVP scope) must not silently
-        claim full confidence — parse_confidence must reflect the empty extraction, even
-        though a generic 'addendum' fallback event still gets recorded (see the HTML
-        no-specific-signal test above for why that fallback exists)."""
+        image-only page, which parse_pdf() never OCRs per MVP scope) must be marked with
+        the discrete 'unparseable_scanned' status — distinguishable from both a normal
+        'parsed' document and a corrupt/unopenable 'unparseable' one — and must not
+        fabricate a generic 'addendum' ChangeEvent from a page with no real content."""
         conn = _in_memory_db()
         raw = _minimal_pdf_bytes("")
         result = ingest_addendum(
@@ -215,6 +215,7 @@ class TestIngestAddendumPdf:
         doc = conn.execute(
             "SELECT * FROM document WHERE doc_id = ?", (result["doc_id"],)
         ).fetchone()
+        assert doc["parse_status"] == "unparseable_scanned"
         assert doc["parse_confidence"] == pytest.approx(0.0)
-        assert result["change_events"] == 1
-        assert result["signals"][0]["event_type"] == "addendum"
+        assert result["change_events"] == 0
+        assert result["signals"] == []

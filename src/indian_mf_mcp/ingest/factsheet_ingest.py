@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 
 from indian_mf_mcp.ingest.document_ingest import ingest_document_from_url
 from indian_mf_mcp.ingest.manager_extract import ExtractedManager, extract_managers_from_pages
-from indian_mf_mcp.parsers.pdf_text import parse_pdf
+from indian_mf_mcp.parsers.pdf_text import classify_parse_status, parse_pdf
 from indian_mf_mcp.store import blobstore
 from indian_mf_mcp.store import manager_repository as mrep
 from indian_mf_mcp.parsers.sniff import FormatKind, sniff
@@ -165,7 +165,7 @@ def ingest_factsheet(
     pdf_result = parse_pdf(raw)
     warnings.extend(pdf_result.warnings)
 
-    parse_status = "parsed" if pdf_result.pages else "unparseable"
+    parse_status = classify_parse_status(pdf_result)
     conn.execute(
         """INSERT INTO document (doc_id, scheme_id, doc_type, doc_date, source_url,
              sha256, content_type, blob_path, retrieved_at, page_count,

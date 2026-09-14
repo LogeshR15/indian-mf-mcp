@@ -9,7 +9,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from indian_mf_mcp.ingest.amc_adapters.base import http_get
-from indian_mf_mcp.parsers.pdf_text import parse_pdf
+from indian_mf_mcp.parsers.pdf_text import classify_parse_status, parse_pdf
 from indian_mf_mcp.parsers.sniff import FormatKind, sniff
 from indian_mf_mcp.store import blobstore
 
@@ -40,7 +40,7 @@ def ingest_document_from_url(
         result = parse_pdf(raw)
         page_count = result.page_count
         parse_confidence = result.parse_confidence
-        parse_status = "parsed" if result.pages else "unparseable"
+        parse_status = classify_parse_status(result)
     else:
         parse_status = f"unsupported_format:{fmt.value}"
 

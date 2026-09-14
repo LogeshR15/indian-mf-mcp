@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from indian_mf_mcp.ingest.addendum_signals import ChangeSignal, extract_change_signals
-from indian_mf_mcp.parsers.pdf_text import parse_pdf
+from indian_mf_mcp.parsers.pdf_text import classify_parse_status, parse_pdf
 from indian_mf_mcp.parsers.sniff import FormatKind, sniff
 from indian_mf_mcp.store import blobstore
 
@@ -109,7 +109,7 @@ def ingest_addendum(
         pages = [p.text for p in pdf_result.pages]
         page_headings = [p.headings for p in pdf_result.pages]
         parse_confidence = pdf_result.parse_confidence
-        parse_status = "parsed" if pdf_result.pages else "unparseable"
+        parse_status = classify_parse_status(pdf_result)
     elif fmt in (FormatKind.HTML, FormatKind.UNKNOWN):
         # Some addenda are HTML notices — extract text naively
         try:

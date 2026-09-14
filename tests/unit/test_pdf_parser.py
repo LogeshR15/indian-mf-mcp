@@ -1,7 +1,14 @@
 """Golden test against a real SID, live-fetched from AMFI's spages/<id>.pdf mapping."""
 from pathlib import Path
 
-from indian_mf_mcp.parsers.pdf_text import find_heading_pages, parse_pdf, search
+from indian_mf_mcp.parsers.pdf_text import (
+    PdfPage,
+    PdfParseResult,
+    classify_parse_status,
+    find_heading_pages,
+    parse_pdf,
+    search,
+)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "sample_sid.pdf"
 
@@ -39,3 +46,33 @@ def test_malformed_pdf_reports_zero_confidence_not_exception():
     assert result.parse_confidence == 0.0
     assert result.pages == []
     assert result.warnings
+
+
+class TestClassifyParseStatus:
+    def test_real_document_is_parsed(self):
+        assert classify_parse_status(_parse()) == "parsed"
+
+    def test_pdf_that_failed_to_open_is_unparseable(self):
+        result = parse_pdf(b"not a real pdf")
+        assert classify_parse_status(result) == "unparseable"
+
+    def test_pages_present_but_zero_extractable_text_is_unparseable_scanned(self):
+        """The scanned/image-only case: pypdf opens the PDF and returns real pages, but
+        none of them yield any text (this project deliberately never OCRs, per MVP
+        scope) — must be distinguished from a plain 'unparseable' corrupt-file failure."""
+        result = PdfParseResult(
+            pages=[PdfPage(page_number=1, text="", headings=[]),
+                   PdfPage(page_number=2, text="   ", headings=[])],
+            page_count=2, parse_confidence=0.0, warnings=[],
+        )
+        assert classify_parse_status(result) == "unparseable_scanned"
+
+    def test_partial_text_extraction_still_counts_as_parsed(self):
+        """Even a low, nonzero confidence (some pages scanned, some not) is still
+        meaningfully 'parsed' — only true zero-confidence means nothing was recovered."""
+        result = PdfParseResult(
+            pages=[PdfPage(page_number=1, text="Investment Objective: ...", headings=[]),
+                   PdfPage(page_number=2, text="", headings=[])],
+            page_count=2, parse_confidence=0.5, warnings=[],
+        )
+        assert classify_parse_status(result) == "parsed"
