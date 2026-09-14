@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import sqlite3
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import openpyxl
@@ -14,6 +15,7 @@ from indian_mf_mcp.ingest.amfi_caplist import (
     _derive_effective_date,
     _parse_caplist_xlsx,
     compute_market_cap_allocation,
+    fetch_and_store_caplist,
     get_market_cap,
 )
 
@@ -265,3 +267,82 @@ class TestComputeMarketCapAllocation:
         result = compute_market_cap_allocation(conn, holdings, "2026-08-31")
         assert result["unclassified_pct"] == pytest.approx(10.0)
         assert result["large_pct"] == pytest.approx(40.0)
+
+
+class TestFetchAndStoreCaplist:
+    """Regression tests for fetch_and_store_caplist's blob-store write path.
+
+    fetch_and_store_caplist previously called the nonexistent blobstore.store(raw, sha256)
+    instead of blobstore.put(raw), so `mf-mcp update-caplist` crashed with an AttributeError
+    before ever writing a document row or an isin_market_cap row. These tests exercise the
+    full fetch → blob-write → parse → DB-write path end to end, mocking only the network call.
+    """
+
+    @staticmethod
+    def _mock_response(raw: bytes) -> MagicMock:
+        resp = MagicMock()
+        resp.content = raw
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    def _mock_client(self, raw: bytes) -> MagicMock:
+        client = MagicMock()
+        client.__enter__.return_value.get.return_value = self._mock_response(raw)
+        return client
+
+    def test_stores_blob_and_upserts_isin_market_cap(self, tmp_path, monkeypatch):
+        from indian_mf_mcp import config
+        monkeypatch.setattr(config, "BLOB_DIR", tmp_path)
+
+        raw = _make_xlsx_flat_layout([
+            ("INE001A01023", "Alpha Corp", "Large Cap"),
+            ("INE002B01023", "Beta Corp", "Mid Cap"),
+        ])
+        conn = _in_memory_db()
+
+        with patch(
+            "indian_mf_mcp.ingest.amfi_caplist.httpx.Client",
+            return_value=self._mock_client(raw),
+        ):
+            result = fetch_and_store_caplist(conn)
+
+        assert result["skipped"] is False
+        assert result["isin_count"] == 2
+        date.fromisoformat(result["effective_date"])  # valid ISO date
+
+        doc = conn.execute(
+            "SELECT * FROM document WHERE doc_type = 'caplist'"
+        ).fetchone()
+        assert doc is not None
+
+        # The blob must actually have been written to disk via blobstore.put — this is
+        # exactly the call that used to raise AttributeError('store').
+        blob_path = Path(doc["blob_path"])
+        assert blob_path.exists()
+        assert blob_path.read_bytes() == raw
+
+        rows = conn.execute(
+            "SELECT isin, market_cap FROM isin_market_cap"
+        ).fetchall()
+        assert {r["isin"]: r["market_cap"] for r in rows} == {
+            "INE001A01023": "large",
+            "INE002B01023": "mid",
+        }
+
+    def test_second_fetch_of_identical_file_is_skipped(self, tmp_path, monkeypatch):
+        from indian_mf_mcp import config
+        monkeypatch.setattr(config, "BLOB_DIR", tmp_path)
+
+        raw = _make_xlsx_flat_layout([("INE001A01023", "Alpha Corp", "Large Cap")])
+        conn = _in_memory_db()
+
+        with patch(
+            "indian_mf_mcp.ingest.amfi_caplist.httpx.Client",
+            return_value=self._mock_client(raw),
+        ):
+            first = fetch_and_store_caplist(conn)
+            second = fetch_and_store_caplist(conn)
+
+        assert first["skipped"] is False
+        assert second["skipped"] is True
+        assert second["doc_id"] == first["doc_id"]

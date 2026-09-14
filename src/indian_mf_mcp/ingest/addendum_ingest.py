@@ -29,8 +29,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from indian_mf_mcp.ingest.addendum_signals import ChangeSignal, extract_change_signals
-from indian_mf_mcp.parsers.pdf_text import extract_pages
-from indian_mf_mcp.parsers.sniff import sniff_format
+from indian_mf_mcp.parsers.pdf_text import parse_pdf
+from indian_mf_mcp.parsers.sniff import FormatKind, sniff
 from indian_mf_mcp.store import blobstore
 
 log = logging.getLogger(__name__)
@@ -94,35 +94,37 @@ def ingest_addendum(
     warnings: list[str] = []
 
     # Store raw bytes in content-addressed blob store
-    blob_path = blobstore.store(raw, sha256)
+    _, blob_path = blobstore.put(raw)
 
     # Detect format and parse
-    fmt = sniff_format(raw)
+    fmt = sniff(raw)
     pages: list[str] = []
+    page_headings: list[list[str]] = []
     parse_status = "parsed"
     parse_confidence = 1.0
 
-    if fmt in ("pdf",):
-        try:
-            pages = extract_pages(raw)
-        except Exception as exc:
-            warnings.append(f"PDF parse error: {exc}")
-            parse_status = "parse_error"
-            parse_confidence = 0.0
-    elif fmt in ("html", "unknown"):
+    if fmt == FormatKind.PDF:
+        pdf_result = parse_pdf(raw)
+        warnings.extend(pdf_result.warnings)
+        pages = [p.text for p in pdf_result.pages]
+        page_headings = [p.headings for p in pdf_result.pages]
+        parse_confidence = pdf_result.parse_confidence
+        parse_status = "parsed" if pdf_result.pages else "unparseable"
+    elif fmt in (FormatKind.HTML, FormatKind.UNKNOWN):
         # Some addenda are HTML notices — extract text naively
         try:
             from selectolax.parser import HTMLParser
             tree = HTMLParser(raw.decode("utf-8", errors="replace"))
             text = tree.root.text(separator="\n")
             pages = [text]
+            page_headings = [[]]
         except Exception as exc:
             warnings.append(f"HTML parse error: {exc}")
             parse_status = "parse_error"
             parse_confidence = 0.0
     else:
-        warnings.append(f"Unsupported format for addendum: {fmt}")
-        parse_status = f"unsupported_format_{fmt}"
+        warnings.append(f"Unsupported format for addendum: {fmt.value}")
+        parse_status = f"unsupported_format_{fmt.value}"
         parse_confidence = 0.0
 
     # Insert document record
@@ -133,16 +135,17 @@ def ingest_addendum(
            (doc_id, scheme_id, amc_id, doc_type, doc_date, source_url, sha256,
             content_type, blob_path, retrieved_at, page_count, parse_status, parse_confidence)
            VALUES (?,?,NULL,'addendum',?,?,?,'application/pdf',?,?,?,?,?)""",
-        (doc_id, scheme_id, doc_date, url, sha256, blob_path, now,
+        (doc_id, scheme_id, doc_date, url, sha256, str(blob_path), now,
          len(pages), parse_status, parse_confidence),
     )
 
     # Store document sections
     for i, page_text in enumerate(pages, start=1):
+        headings = page_headings[i - 1] if i - 1 < len(page_headings) else []
         conn.execute(
             """INSERT INTO document_section (doc_id, page_number, headings_json, text)
-               VALUES (?, ?, '[]', ?)""",
-            (doc_id, i, page_text),
+               VALUES (?, ?, ?, ?)""",
+            (doc_id, i, json.dumps(headings), page_text),
         )
 
     # Extract change signals

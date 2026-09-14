@@ -195,7 +195,7 @@ def fetch_and_store_caplist(conn: sqlite3.Connection) -> dict:
         }
 
     # Store raw bytes
-    blob_path = blobstore.store(raw, sha256)
+    _, blob_path = blobstore.put(raw)
 
     # Parse
     effective_date, entries = _parse_caplist_xlsx(raw)
@@ -213,7 +213,7 @@ def fetch_and_store_caplist(conn: sqlite3.Connection) -> dict:
            VALUES (?,NULL,NULL,'caplist',?,?,?,
                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                    ?,?,NULL,'parsed',?)""",
-        (doc_id, effective_date, CAP_LIST_URL, sha256, blob_path, now,
+        (doc_id, effective_date, CAP_LIST_URL, sha256, str(blob_path), now,
          1.0 if entries else 0.0),
     )
 
