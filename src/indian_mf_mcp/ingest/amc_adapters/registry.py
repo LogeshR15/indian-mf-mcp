@@ -19,6 +19,8 @@ from indian_mf_mcp.ingest.amc_adapters import combined_workbook
 from indian_mf_mcp.ingest.amc_adapters.axis import AxisAdapter
 from indian_mf_mcp.ingest.amc_adapters.bajaj_finserv import BajajFinservAdapter
 from indian_mf_mcp.ingest.amc_adapters.bajaj_finserv import find_sheet_code as _bajaj_sheet_resolver
+from indian_mf_mcp.ingest.amc_adapters.bandhan import BandhanAdapter
+from indian_mf_mcp.ingest.amc_adapters.bandhan import _resolve_sheet as _bandhan_sheet_resolver
 from indian_mf_mcp.ingest.amc_adapters.bank_of_india import BankOfIndiaAdapter
 from indian_mf_mcp.ingest.amc_adapters.baroda_bnp_paribas import BarodaBNPParibasAdapter
 from indian_mf_mcp.ingest.amc_adapters.dsp import DSPAdapter
@@ -99,6 +101,12 @@ ADAPTERS: dict[str, tuple[type, Callable[[bytes, str], str | None] | None]] = {
     "bajaj-finserv": (BajajFinservAdapter, _bajaj_sheet_resolver),
     "iti": (ITIAdapter, combined_workbook.find_sheet_code),
     "invesco": (InvescoAdapter, None),
+    # No Index sheet on either Bandhan combined-workbook family and no fixed title
+    # row/column across eras, so it carries its own generic title-scan resolver. Only the
+    # Debt Fund workbook from Jan 2025 onward actually reconciles (see bandhan.py docstring);
+    # older files and the Equity Hybrid Fund workbook are still surfaced and fall out via the
+    # existing skipped_reconciliation_failed / skipped_sheet_not_found gates.
+    "bandhan": (BandhanAdapter, _bandhan_sheet_resolver),
 }
 
 

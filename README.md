@@ -91,12 +91,12 @@ claude mcp add indian-mf -- uv run --directory /path/to/indian-mf-mcp mf-mcp ser
 
 ## AMC coverage
 
-**29 of ~53 AMCs** have working portfolio adapters:
+**30 of ~53 AMCs** have working portfolio adapters:
 
-360 ONE · Axis · Bajaj Finserv · Bank of India · Baroda BNP Paribas · DSP · Franklin Templeton ·
-Groww · HDFC · ICICI Prudential · Invesco · ITI · Kotak Mahindra · LIC · Mirae Asset · Motilal
-Oswal · Navi · Nippon India · PPFAS · quant · Quantum · SBI · Sundaram · Tata · Taurus · Trust ·
-Union · UTI · Zerodha
+360 ONE · Axis · Bajaj Finserv · Bandhan · Bank of India · Baroda BNP Paribas · DSP · Franklin
+Templeton · Groww · HDFC · ICICI Prudential · Invesco · ITI · Kotak Mahindra · LIC · Mirae Asset ·
+Motilal Oswal · Navi · Nippon India · PPFAS · quant · Quantum · SBI · Sundaram · Tata · Taurus ·
+Trust · Union · UTI · Zerodha
 
 NAV, scheme identity and taxonomy come from AMFI and cover **all** schemes — coverage gaps
 affect portfolio holdings only.

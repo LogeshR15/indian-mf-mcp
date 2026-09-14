@@ -11,7 +11,7 @@ _AMC_CHOICES = [
     "sundaram", "union", "lic", "taurus", "bank-of-india",
     "hdfc", "quant", "navi", "zerodha", "axis", "kotak",
     "icici-prudential", "quantum", "360-one", "groww", "trust", "bajaj-finserv",
-    "iti", "invesco",
+    "iti", "invesco", "bandhan",
 ]
 
 

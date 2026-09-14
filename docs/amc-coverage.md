@@ -79,19 +79,20 @@ every entry below as a snapshot of one investigation, not a settled fact.
     discovery call instead of hardcoding a map; its filenames also omit the "Taurus" prefix,
     so scheme-hint matching has to be bidirectional — the one-directional check `union.py`
     uses would silently return zero documents.
-  - **Nine AMCs remain blocked, down from fifteen — and six of those fifteen were
-    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential, quant and Invesco are all
-    live as of 2026-09-14 (details below). That is a 40% error rate in the original triage, and
-    the errors were not random: each came from testing the wrong surface. HDFC and Kotak were
-    judged on their *investor portals* rather than their file hosts; Axis was judged on a
-    *browser route* that was never required; quant was judged on the *wrong page*, one whose
-    content is click-gated; ICICI was judged on an anti-bot script that only ever guarded the
-    SPA shell; Invesco was judged on a WAF verdict that does not reproduce against the current
-    site at all (see below — possibly a stale verdict from before a site rebuild, or a
-    mis-attribution from its sibling entry, WhiteOak Capital). **The portal is not the
-    product.** Every verdict below was reached the same way and none should be trusted until
-    re-tested against the file host, any static JS asset the site already serves, and AMFI's
-    own registered URL.
+  - **Eight AMCs remain blocked, down from fifteen — and seven of those fifteen were
+    misdiagnosed, not blocked.** HDFC, Kotak, Axis, ICICI Prudential, quant, Invesco and Bandhan
+    are all live as of 2026-09-14 (details below). That is a 47% error rate in the original
+    triage, and the errors were not random: each came from testing the wrong surface. HDFC and
+    Kotak were judged on their *investor portals* rather than their file hosts; Axis was judged
+    on a *browser route* that was never required; quant was judged on the *wrong page*, one
+    whose content is click-gated; ICICI was judged on an anti-bot script that only ever guarded
+    the SPA shell; Invesco was judged on a WAF verdict that does not reproduce against the
+    current site at all (possibly a stale verdict from before a site rebuild, or a
+    mis-attribution from its sibling entry, WhiteOak Capital); Bandhan was judged on its
+    encrypted transactional API without checking whether a separate plaintext tier existed
+    alongside it. **The portal is not the product.** Every verdict below was reached the same
+    way and none should be trusted until re-tested against the file host, any static JS asset
+    the site already serves, and AMFI's own registered URL.
   - **Still blocked, by failure mode:**
     - *Commercial WAF on the whole domain* — **WhiteOak Capital** (CloudFront/AWS-WAF).
       **Invesco** was removed from this entry 2026-09-14 — it's live now, see below.
@@ -105,16 +106,14 @@ every entry below as a snapshot of one investigation, not a settled fact.
       instead of driving a browser at all.
     - *No discoverable disclosure page* — **HSBC**. AMFI does register a URL for it, which the
       original attempt may not have had.
-    - *Application-layer payload encryption* — **Bandhan**, **JM Financial** and **Mahindra
-      Manulife** all return a real `200 OK` whose `{"data"/"payload": "<base64>"}` body decodes
-      to high-entropy ciphertext rather than JSON. Replaying a captured request fails;
-      decrypting would mean reverse-engineering each site's client-side crypto, which is out of
-      scope. The repetition across three unrelated AMCs suggests a shared fintech backend
-      vendor. **But see the Axis finding below**: Axis's own bundled JS exposes an
-      `API_ENCRYPTION_STATUS_CMS: "none"` flag marking its CMS tier as plaintext while its
-      transactional tier is encrypted. An AMC running both tiers would look encrypted if only
-      the transactional one was probed, so these three deserve a re-test before the verdict
-      stands.
+    - *Application-layer payload encryption* — **JM Financial** and **Mahindra Manulife** both
+      return a real `200 OK` whose `{"data"/"payload": "<base64>"}` body decodes to
+      high-entropy ciphertext rather than JSON. Replaying a captured request fails; decrypting
+      would mean reverse-engineering each site's client-side crypto, which is out of scope.
+      **Bandhan was originally grouped here too and turned out to be misdiagnosed** — see
+      below. The repetition across JM Financial and Mahindra Manulife still suggests a shared
+      fintech backend vendor for their transactional tiers, and per the Axis/Bandhan precedent
+      both deserve a re-test for a separate plaintext CMS tier before the verdict stands.
     - *Policy, not technology* — **Canara Robeco**'s discovery works cleanly (static links,
       exact 100% reconciliation, zero parser changes), but its WAF rejects the project's honest
       User-Agent while accepting a spoofed browser one. Asked the user rather than deciding
@@ -415,6 +414,51 @@ every entry below as a snapshot of one investigation, not a settled fact.
     noting: the "Monthly Holdings" category is a genuine, separate tab from "Fortnightly
     Holdings" and "Half Yearly Holdings" on the live site — the AMFI-registered URLs that only
     named the latter two undersold what the AMC actually publishes.
+  - **Bandhan is live, and its blocked verdict was reached by testing only one of two API
+    tiers.** It had been grouped with JM Financial and Mahindra Manulife under "application-
+    layer payload encryption" because `pnservices.bandhanmutual.com/internal/investorservices/
+    encdec` — the transactional tier, named literally "encdec" in the site's own bundled JS —
+    really does return encrypted payloads. But `bandhanmutual.com`'s 11MB obfuscated
+    `main.<hash>.js` also names a second host, `cmsnew.bandhanmutual.com`, called for its
+    monthly-factsheets/FAQ content. That CMS's *default* WordPress REST namespace is genuinely
+    locked down site-wide (`GET /wp-json/` 401s with a "DRA: Only authenticated users..."
+    plugin message — a real, accurate block, same shape as Kotak's whole-domain WAF), but a
+    *separate*, custom `finance-api/v1` namespace the same CMS registers has its own public
+    permission callback: `GET /wp-json/finance-api/v1/posts/monthly-portfolio` with the honest
+    UA and no auth returns a clean `200` and real JSON — the entire archive, one call, 8 posts
+    spanning 2018 and 2020–2026 (2019 absent — a real gap). **The generalizable find, and a
+    second data point alongside Axis's `API_ENCRYPTION_STATUS_CMS` flag:** a locked-down or
+    encrypted *default* API on a host doesn't rule out a separate, differently-registered
+    plaintext tier living right next to it — worth checking for a second REST namespace/route
+    table, not just an encryption-status flag, before recording an AMC as blocked on payload
+    encryption. This directly reopens the question for JM Financial and Mahindra Manulife.
+    Two further quirks made this AMC harder than the discovery alone suggests. First, the CMS
+    silently *falls back* to an unrelated "latest posts" list for any category slug it doesn't
+    recognise rather than 404ing, which cost real trial and error before landing on the exact
+    right taxonomy slug (`monthly-portfolio`). Second, and more consequentially: Bandhan
+    publishes **two** combined workbooks a month — "Debt Fund Portfolio" and "Equity Hybrid
+    Fund Portfolios" — and only the Debt Fund one is usable at all. The Equity Hybrid workbook
+    carries a `Company / Industry / (%) NAV` top-holdings summary with **no ISIN and no
+    per-security detail whatsoever**, at every era sampled (2018, 2022, 2023, 2025); the shared
+    parser correctly refuses it (no ISIN column to detect) rather than fabricating security-
+    level data from a summary. And the Debt Fund workbook itself has a hard format-change
+    boundary: every file from December 2018 through December 2024 uses the same ISIN-less
+    `Name / Rating / Total` issuer-level rating-bucket layout (also unparseable), switching to
+    the full SEBI-standard ISIN-complete layout starting exactly with the January 2025 file
+    (confirmed by a roughly 5x file-size jump the same month). **Real capability limit:**
+    reconciling history through this adapter is January 2025 onward only, verified at exactly
+    100% on both the January 2025 and August 2026 files. Neither combined workbook has an Index
+    sheet, and the scheme-title cell's row/column shifts release to release, so the adapter
+    carries a local resolver that scans each sheet's own first ~6 rows for the first string
+    that isn't a short internal code or a known template label, rather than assuming a fixed
+    position — the same generalized-scan approach Trust and Bajaj Finserv needed for their own
+    non-fixed layouts. `document_name` free text is unreliable as a *category* label (one March
+    2025 entry is titled "...Debt Fund..." while its own URL and content are the Equity Hybrid
+    workbook — a genuine CMS data-entry error) but is still the only source for each file's
+    day-of-month, since day is not safely assumed to be month-end (some historical entries are
+    a few days short of it, e.g. "26 February 2021" — a last-business-day filing, not month-
+    end) — extracted by searching for the number preceding whichever month token appears,
+    verified against all 124 real entries in the live archive with zero fallback needed.
   - The remaining ~20 AMCs haven't been attempted yet. This is real, per-AMC engineering
     effort — exactly what the spec calls "the real moat" of the project — but the pattern
     (Playwright discovery → adapter → golden test) is proven across twelve materially
