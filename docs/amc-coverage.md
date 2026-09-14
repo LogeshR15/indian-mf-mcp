@@ -36,10 +36,10 @@ every entry below as a snapshot of one investigation, not a settled fact.
 - **Phase 2 (portfolio spine):** live AMC portfolio XLSX parsing with 100%-reconciliation
   gating, ISIN-keyed change engine (corporate-action flagging, price/flow drift detection),
   holding persistence, concentration, and `get_fund_portfolio`.
-  - **AMC coverage today (29): 360 ONE, Axis, Bajaj Finserv, Bank of India, Baroda BNP Paribas,
-    DSP, Franklin Templeton, Groww, HDFC, HSBC, ICICI Prudential, ITI, Kotak Mahindra, LIC,
-    Mirae Asset, Motilal Oswal, Navi, Nippon India, PPFAS, quant, Quantum, SBI, Sundaram, Tata,
-    Taurus, Trust, Union, UTI, and Zerodha** (see
+  - **AMC coverage today (31): 360 ONE, Axis, Bajaj Finserv, Bandhan, Bank of India, Baroda BNP
+    Paribas, DSP, Franklin Templeton, Groww, HDFC, HSBC, ICICI Prudential, Invesco, ITI, Kotak
+    Mahindra, LIC, Mirae Asset, Motilal Oswal, Navi, Nippon India, PPFAS, quant, Quantum, SBI,
+    Sundaram, Tata, Taurus, Trust, Union, UTI, and Zerodha** (see
     `ingest/amc_adapters/registry.py`), each verified live end-to-end with its own golden
     fixture test. Adding an AMC means (1) a real, live-verified way to discover its monthly
     portfolio files — a static link, or a documented backing endpoint found via a one-time
