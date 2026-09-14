@@ -92,7 +92,9 @@ every entry below as a snapshot of one investigation, not a settled fact.
   - **Still blocked, by failure mode:**
     - *Commercial WAF on the whole domain* — **Invesco** and **WhiteOak Capital**
       (CloudFront/AWS-WAF; Invesco's India business may also have been rebranded, possibly
-      making it moot) and **Edelweiss** (Akamai edge WAF on its portfolio API specifically).
+      making it moot). **Edelweiss** was re-tested live 2026-09-14, specifically looking for
+      the HDFC/Kotak-style portal/file-host split — see its own entry below; the split does
+      not hold here and the verdict stands as blocked, but with much better evidence now.
     - *Headless-JS fingerprinting* — **PGIM India**: the real API is same-origin but reachable
       only after client-side JS the site fingerprints and blocks in Playwright. Worth
       re-testing the way Axis was solved — by reading its bundled JS for the request shape
@@ -117,6 +119,42 @@ every entry below as a snapshot of one investigation, not a settled fact.
     - *Sandbox artifact, not a real blocker* — **Aditya Birla**'s discovery endpoint is found
       and documented; its file host is blocked by *this sandbox's* network policy and should
       work in a normal environment.
+    - **Edelweiss confirmed still blocked, re-tested 2026-09-14 — and it is a harder case
+      than HDFC or Kotak, not a repeat of either.** Both of those turned out to be portal-only
+      blocks with an unblocked file host one hop away; Edelweiss was re-tested specifically
+      looking for that split and it does not exist. `www.edelweissmf.com` sits behind an
+      Akamai edge WAF that guards the *entire* domain, not just `/statutory` or a backing API:
+      the bare homepage (`GET https://www.edelweissmf.com/`) returns a flat `403` — Akamai's
+      own "Access Denied" edge page, referencing `errors.edgesuite.net` with an `akamai-grn`
+      trace id — to the honest User-Agent, identically to `/statutory`,
+      `/statutory/portfolio-of-schemes` and `/downloads/factsheets`. Crucially this is not a
+      shell-only block the way ICICI's or Trust's turned out to be: two real, currently-live
+      document URLs were sourced independently of each other (one from a public
+      `site:edelweissmf.com filetype:xlsx` search, one from AdvisorKhoj's third-party
+      download index; both still point at `www.edelweissmf.com`, confirming Edelweiss has
+      never moved its files off that domain) —
+      `www.edelweissmf.com/Files/MF/Statutory/Portfolio_of_schemes/Monthly_Portfolio_and_RiskoMeter/EDEL_Portfolio_Monthly_Notes_31Jul2026_10082026130139.xlsx`
+      (July 2026, the most recently published month at time of testing) and an equivalent June
+      2026 URL — and both return the identical Akamai "Access Denied" signature as the
+      homepage, not a 200. That rules out the HDFC/Kotak pattern directly: there is no
+      separate `files.`/`cdn.`/S3 host to fall back to, because the real XLSX bytes are served
+      from the same blocked domain as the page shell. Candidate separate hosts were checked
+      and ruled out one by one: AMFI's own registered `online.edelweissmf.com` does not
+      currently resolve at all (`NXDOMAIN` on a dangling CNAME to
+      `online.edelweissmf.com.induscdn.com` — IndusCDN being a generic Indian RTA/transaction
+      white-label vendor used by several AMCs), and by its name and CNAME target it reads as
+      Edelweiss's investor-transaction portal rather than a document host even when live;
+      `cdn1.edelweissfin.com` (the sister non-MF "Edelweiss Financial Services" brand, turned
+      up by the same search) sits behind the identical Akamai edge and 403s the same way;
+      guessed `files./static./assets./download.edelweissmf.com` subdomains simply don't
+      resolve. No JS challenge, cookie, or redirect is involved anywhere in this — the
+      response is a hard, edge-cached "Access Denied" (`cache-control: max-age=0`,
+      `server-timing: cdn-cache; desc=HIT`, i.e. even the block itself is being served from
+      cache), so there was no client-side bundle to read for a same-origin plaintext tier the
+      way Axis's case resolved. Verdict stands, now on firmer evidence: genuinely blocked,
+      domain-wide, no unblocked file host or subdomain found. Per spec.md's honest-UA policy
+      and this project's rule against evading access controls, no further bypass was
+      attempted.
   - **HDFC moved from "blocked outright" to live, and the reason generalizes.** Its listing
     host and its *file* host are different machines with different rules:
     `www.hdfcfund.com` returns a flat edge-level `403 Access Denied` to the honest
