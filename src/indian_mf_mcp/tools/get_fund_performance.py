@@ -22,16 +22,53 @@ from indian_mf_mcp.store import repository as repo
 STANDARD_HORIZONS = [1, 3, 5, 7, 10]
 
 
-def _pick_direct_growth_plan(conn: sqlite3.Connection, scheme_id: str) -> sqlite3.Row | None:
+_KNOWN_PLANS = {
+    "direct_growth": ("Direct", "Growth"),
+    "regular_growth": ("Regular", "Growth"),
+    "direct_idcw": ("Direct", "IDCW"),
+    "regular_idcw": ("Regular", "IDCW"),
+}
+
+
+def _pick_plan(conn: sqlite3.Connection, scheme_id: str, plan: str) -> tuple[sqlite3.Row | None, str | None]:
+    """Resolve the requested plan (e.g. "regular_growth") to a concrete plan row.
+
+    Returns (row, warning). The requested `plan` was previously accepted by the tool
+    signature but silently ignored — every call returned Direct/Growth regardless of
+    what was asked for. Falls back to Direct/Growth (then any Direct plan, then any
+    plan at all) only when the exact requested plan/option combination doesn't exist,
+    and always says so via the warning rather than substituting silently.
+    """
     plans = repo.get_plans_for_scheme(conn, scheme_id)
+    if not plans:
+        return None, None
+
+    target = _KNOWN_PLANS.get(plan)
+    if target is None:
+        warning = (
+            f"Unrecognised plan={plan!r}; expected one of {sorted(_KNOWN_PLANS)}. "
+            "Falling back to direct_growth."
+        )
+        target = _KNOWN_PLANS["direct_growth"]
+    else:
+        warning = None
+
+    plan_type, option_type = target
+    for p in plans:
+        if p["plan_type"] == plan_type and p["option_type"] == option_type:
+            return p, warning
+
+    fallback_warning = (
+        f"Requested plan={plan!r} but no {plan_type}/{option_type} plan exists for "
+        f"{scheme_id}; "
+    )
     for p in plans:
         if p["plan_type"] == "Direct" and p["option_type"] == "Growth":
-            return p
-    # fall back to any Direct plan, then any plan at all — flagged via warning, never silent.
+            return p, fallback_warning + "used Direct/Growth instead."
     for p in plans:
         if p["plan_type"] == "Direct":
-            return p
-    return plans[0] if plans else None
+            return p, fallback_warning + f"used Direct/{p['option_type']} instead."
+    return plans[0], fallback_warning + f"used {plans[0]['plan_type']}/{plans[0]['option_type']} instead."
 
 
 def _series_for_plan(conn: sqlite3.Connection, plan_id: str) -> R.NavSeries:
@@ -139,15 +176,12 @@ def get_fund_performance(
     results = {}
     for scheme_id in scheme_ids:
         pb = ProvenanceBuilder()
-        chosen_plan = _pick_direct_growth_plan(conn, scheme_id)
+        chosen_plan, plan_warning = _pick_plan(conn, scheme_id, plan)
         if not chosen_plan:
             results[scheme_id] = {"error": "no_plans_found", "meta": {"scheme_id": scheme_id}}
             continue
-        if chosen_plan["plan_type"] != "Direct" or chosen_plan["option_type"] != "Growth":
-            pb.warn(
-                f"Requested plan=direct_growth but no Direct/Growth plan exists for "
-                f"{scheme_id}; used {chosen_plan['plan_type']}/{chosen_plan['option_type']} instead."
-            )
+        if plan_warning:
+            pb.warn(plan_warning)
 
         series = _series_for_plan(conn, chosen_plan["plan_id"])
         if len(series) < 2:
@@ -172,7 +206,7 @@ def get_fund_performance(
                 start = effective_as_of - timedelta(days=int(h * 365.25))
                 val = R.cagr(series, start, effective_as_of)
                 calc = pb.add_calc(method="cagr_daily_nav", inputs=[src_nav],
-                                    params={"plan": "direct_growth", "horizon_years": h, "as_of": effective_as_of.isoformat()})
+                                    params={"plan": plan, "horizon_years": h, "as_of": effective_as_of.isoformat()})
                 pb.fact(f"cagr_{h}y", val, calc, "calculated")
             si_val = R.since_inception_cagr(series)
             calc = pb.add_calc(method="cagr_since_inception", inputs=[src_nav])

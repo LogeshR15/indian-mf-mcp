@@ -53,6 +53,8 @@ def _candidate_for_scheme(conn: sqlite3.Connection, rows: list[sqlite3.Row], que
 
 
 def resolve_one(conn: sqlite3.Connection, query: str, limit: int) -> list[dict]:
+    if not query or not query.strip():
+        return []
     rows = repo.find_plans_by_query(conn, query, limit=limit * 8)
     by_scheme: dict[str, list[sqlite3.Row]] = {}
     for r in rows:

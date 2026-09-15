@@ -30,6 +30,19 @@ def test_ingest_then_resolve_by_name_and_isin(tmp_path):
     conn.close()
 
 
+def test_empty_or_blank_query_does_not_match_everything(tmp_path):
+    """An empty/whitespace query must not become a SQL LIKE '%%' that matches every row."""
+    conn = get_connection(tmp_path / "test_blank.db")
+    raw = FIXTURE.read_bytes()
+    run_daily_ingest(conn, raw=raw, as_of=date(2026, 9, 10))
+
+    for blank in ["", "   ", "\t"]:
+        result = resolve_fund(conn, blank, limit=5)
+        assert result[blank] == [], f"query {blank!r} should not match anything"
+        assert "_warnings" in result
+    conn.close()
+
+
 FIXTURE_V2 = Path(__file__).parent.parent / "fixtures" / "sample_navall_v2.txt"
 
 
