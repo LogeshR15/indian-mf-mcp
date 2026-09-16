@@ -29,6 +29,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/indian_mf_mcp"]
 
+[tool.pytest.ini_options]
+markers = [
+    "network: hits a real AMC/AMFI endpoint over the internet; excluded from the default run.",
+]
+addopts = "-m 'not network'"
+
 [dependency-groups]
 dev = [
     "playwright>=1.62.0",

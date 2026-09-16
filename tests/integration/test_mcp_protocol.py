@@ -179,9 +179,21 @@ async def test_get_fund_performance_multi_scheme_comparison(session):
         "metrics": ["trailing"],
     }))
     assert set(out.keys()) == {"scheme-alpha", "scheme-beta", "scheme-gamma"}
-    # scheme-gamma has no Direct/Growth plan -> fallback path, must warn, not silently substitute
-    assert "warnings" in out["scheme-gamma"]["meta"]
+    # scheme-gamma has no Growth plan at all (Regular/IDCW only) -> return analytics must
+    # be refused outright, never silently computed off non-distribution-adjusted IDCW NAV.
+    assert out["scheme-gamma"]["error"] == "idcw_plan_return_analytics_unsupported"
     assert out["scheme-gamma"]["meta"]["plan_id"] == "plan-gamma-ri"
+
+
+async def test_get_fund_performance_idcw_plan_is_refused_not_understated(session):
+    """Regression: an IDCW plan's NAV is not distribution-adjusted; computing CAGR off it
+    would silently understate every return. Must error, never emit a plausible-looking
+    but wrong figure."""
+    out = _payload(await session.call_tool(
+        "get_fund_performance", {"scheme_ids": ["scheme-gamma"], "plan": "regular_idcw"}
+    ))
+    assert out["scheme-gamma"]["error"] == "idcw_plan_return_analytics_unsupported"
+    assert "data" not in out["scheme-gamma"]
 
 
 async def test_get_fund_performance_unknown_scheme_id(session):
@@ -317,3 +329,41 @@ async def test_all_six_tools_are_registered(session):
         "resolve_fund", "get_fund_performance", "get_fund_profile",
         "get_fund_portfolio", "list_disclosure_events", "get_document",
     }
+
+
+def _collect_fact_srcs(node, out):
+    """Recursively find every `{"v", "src", "k"}`-shaped fact and collect its `src` key —
+    the automated version of "never ship a bare number". Walks any dict/list nesting so
+    it works unmodified across all six tools' payload shapes."""
+    if isinstance(node, dict):
+        if {"v", "src", "k"} <= node.keys():
+            out.append(node["src"])
+            return
+        for value in node.values():
+            _collect_fact_srcs(value, out)
+    elif isinstance(node, list):
+        for value in node:
+            _collect_fact_srcs(value, out)
+
+
+async def test_provenance_completeness_across_all_tools(session):
+    """Every fact's `src` key must resolve into that scheme's `sources` table, for every
+    tool that emits a provenance envelope. Automates the "shipped a bare number" class of
+    regression instead of relying on spot-checks in individual tests."""
+    calls = [
+        ("get_fund_performance", {"scheme_ids": ["scheme-alpha", "scheme-beta"]}),
+        ("get_fund_profile", {"scheme_ids": ["scheme-alpha", "scheme-beta"]}),
+    ]
+    for tool_name, args in calls:
+        out = _payload(await session.call_tool(tool_name, args))
+        for scheme_id, payload in out.items():
+            if "data" not in payload:
+                continue  # error payloads (e.g. no_plans_found) carry no provenance to check
+            srcs = []
+            _collect_fact_srcs(payload["data"], srcs)
+            sources = payload.get("sources", {})
+            for src in srcs:
+                assert src in sources, (
+                    f"{tool_name}[{scheme_id}]: fact references src={src!r} "
+                    f"which is not in sources={sorted(sources)}"
+                )

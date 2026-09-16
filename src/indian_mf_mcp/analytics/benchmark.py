@@ -40,39 +40,54 @@ from indian_mf_mcp.store import repository as repo
 # scheme code of a suitable Direct-Growth index fund proxy.
 # Only add entries you have verified live — wrong proxies silently corrupt comparisons.
 
+def _proxy_caveat(index_label: str) -> str:
+    """Standard proxy-bias caveat: direction and rough magnitude, not just 'is_proxy'.
+
+    The proxy fund's NAV already nets out its own TER + tracking error against the true
+    index, so any fund-vs-"benchmark" gap computed from it is biased in the ACTIVE fund's
+    favour (the proxy understates what the real index actually returned) by roughly the
+    proxy's own cost drag — commonly 20-100 bps/yr depending on the index and fund.
+    """
+    return (
+        f"Proxy: NAV series of a low-TER {index_label} index fund, not the licensed index "
+        "itself. This biases the fund-vs-benchmark gap in the ACTIVE FUND'S FAVOUR by "
+        "roughly the proxy's own cost drag (its TER + tracking error against the true "
+        "index) — typically ~20-100 bps/yr. Use TRI values instead of this proxy wherever "
+        "a licensed TRI series becomes available."
+    )
+
+
 BENCHMARK_PROXIES: dict[str, dict] = {
     # Nifty 50 / Sensex proxies
     "nifty 50 tri": {
         "scheme_code": "120503",   # UTI Nifty 50 Index Fund - Direct Growth (verified 2026-09)
         "label": "UTI Nifty 50 Index Fund - Direct Growth",
-        "caveat": "Proxy: NAV series of a low-TER Nifty 50 index fund "
-                  "(biased downward by fund TER + tracking error, ~20-40 bps/yr).",
+        "caveat": _proxy_caveat("Nifty 50"),
     },
     "nifty 500 tri": {
         "scheme_code": "145552",   # Motilal Oswal Nifty 500 Index Fund - Direct Growth
         "label": "Motilal Oswal Nifty 500 Index Fund - Direct Growth",
-        "caveat": "Proxy: NAV series of a low-TER Nifty 500 index fund "
-                  "(biased downward by fund TER + tracking error).",
+        "caveat": _proxy_caveat("Nifty 500"),
     },
     "nifty midcap 150 tri": {
         "scheme_code": "147622",   # Motilal Oswal Nifty Midcap 150 Index Fund - Direct Growth
         "label": "Motilal Oswal Nifty Midcap 150 Index Fund - Direct Growth",
-        "caveat": "Proxy: NAV series of a low-TER Nifty Midcap 150 index fund.",
+        "caveat": _proxy_caveat("Nifty Midcap 150"),
     },
     "nifty smallcap 250 tri": {
         "scheme_code": "147624",   # Motilal Oswal Nifty Smallcap 250 Index Fund - Direct Growth
         "label": "Motilal Oswal Nifty Smallcap 250 Index Fund - Direct Growth",
-        "caveat": "Proxy: NAV series of a low-TER Nifty Smallcap 250 index fund.",
+        "caveat": _proxy_caveat("Nifty Smallcap 250"),
     },
     "bse sensex tri": {
         "scheme_code": "119598",   # HDFC Index Fund Sensex Plan - Direct Growth
         "label": "HDFC Index Fund Sensex Plan - Direct Growth",
-        "caveat": "Proxy: NAV series of a low-TER Sensex index fund.",
+        "caveat": _proxy_caveat("Sensex"),
     },
     "nifty next 50 tri": {
         "scheme_code": "120505",   # UTI Nifty Next 50 Index Fund - Direct Growth
         "label": "UTI Nifty Next 50 Index Fund - Direct Growth",
-        "caveat": "Proxy: NAV series of a low-TER Nifty Next 50 index fund.",
+        "caveat": _proxy_caveat("Nifty Next 50"),
     },
 }
 

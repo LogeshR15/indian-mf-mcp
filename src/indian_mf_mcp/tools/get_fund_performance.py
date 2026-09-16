@@ -167,7 +167,16 @@ def get_fund_performance(
     rolling_windows: list[int] | None = None,
     nav_series: bool = False,
     provenance: str = "compact",
+    risk_free_annual: float | None = None,
 ) -> dict:
+    # Sharpe/Sortino/alpha stay comparable across funds at the same point in time (all
+    # computed with the same rate), but a stated CONSTANT is not comparable across time
+    # windows spanning a repo-rate move (e.g. 4%->6.5%). Making the rate an explicit,
+    # always-echoed parameter lets a caller pin it for genuine cross-period comparisons
+    # instead of silently inheriting whatever the current default happens to be.
+    risk_free_annual = (
+        config.DEFAULT_RISK_FREE_RATE_ANNUAL if risk_free_annual is None else risk_free_annual
+    )
     comparators = comparators or ["category"]
     metrics = metrics or ["trailing", "rolling", "risk", "drawdown", "stress"]
     rolling_windows = rolling_windows or [1, 3, 5]
@@ -180,6 +189,31 @@ def get_fund_performance(
         if not chosen_plan:
             results[scheme_id] = {"error": "no_plans_found", "meta": {"scheme_id": scheme_id}}
             continue
+
+        if chosen_plan["option_type"] == "IDCW":
+            # AMFI's NAVAll/NAV-history feed publishes raw NAV, not a distribution-adjusted
+            # (total-return) series. Computing CAGR/return metrics directly off an IDCW
+            # plan's NAV silently understates every return by whatever was paid out as
+            # income distributions — the number still looks plausible, so nothing else
+            # would catch it. Refuse rather than emit a confidently wrong figure.
+            results[scheme_id] = {
+                "error": "idcw_plan_return_analytics_unsupported",
+                "meta": {
+                    "scheme_id": scheme_id,
+                    "plan_id": chosen_plan["plan_id"],
+                    "plan_requested": plan,
+                    "note": (
+                        "This plan is an IDCW (dividend/payout) option. AMFI NAV history for "
+                        "IDCW plans is not distribution-adjusted, so CAGR/volatility/Sharpe "
+                        "computed from it would systematically understate real returns with no "
+                        "warning that would catch it. Request a Growth plan instead "
+                        "(plan='direct_growth' or 'regular_growth'); if this scheme has no "
+                        "Growth plan, return analytics are genuinely unavailable for it."
+                    ),
+                },
+            }
+            continue
+
         if plan_warning:
             pb.warn(plan_warning)
 
@@ -218,11 +252,17 @@ def get_fund_performance(
             calc = pb.add_calc(method="annualised_vol_daily", inputs=[src_nav])
             pb.fact("volatility_annualised", risk_mod.annualised_volatility(daily_rets), calc, "calculated")
             calc = pb.add_calc(method="sharpe_ratio", inputs=[src_nav],
-                                params={"risk_free_annual": config.DEFAULT_RISK_FREE_RATE_ANNUAL})
-            pb.fact("sharpe_ratio", risk_mod.sharpe_ratio(daily_rets), calc, "calculated",
-                    caveat="Risk-free rate is a stated constant (RBI T-bill live feed not yet integrated).")
-            calc = pb.add_calc(method="sortino_ratio", inputs=[src_nav])
-            pb.fact("sortino_ratio", risk_mod.sortino_ratio(daily_rets), calc, "calculated")
+                                params={"risk_free_annual": risk_free_annual})
+            pb.fact("sharpe_ratio", risk_mod.sharpe_ratio(daily_rets, risk_free_annual), calc, "calculated",
+                    caveat=(
+                        f"Risk-free rate is a stated constant ({risk_free_annual:.4f} annualised, "
+                        "not a live RBI T-bill feed) — comparable across funds computed at the same "
+                        "time, NOT comparable across time windows spanning a rate move. Pass "
+                        "risk_free_annual explicitly to pin the rate for cross-period comparisons."
+                    ))
+            calc = pb.add_calc(method="sortino_ratio", inputs=[src_nav],
+                                params={"risk_free_annual": risk_free_annual})
+            pb.fact("sortino_ratio", risk_mod.sortino_ratio(daily_rets, risk_free_annual), calc, "calculated")
 
         if "rolling" in metrics:
             rolling_out = {}
@@ -326,7 +366,7 @@ def get_fund_performance(
                             caveat=proxy["caveat"])
                     pb.fact("information_ratio", risk_mod.information_ratio(daily_rets, bench_rets),
                             calc_b, "approximation", caveat=proxy["caveat"])
-                    pb.fact("alpha", risk_mod.alpha(daily_rets, bench_rets), calc_b, "approximation",
+                    pb.fact("alpha", risk_mod.alpha(daily_rets, bench_rets, risk_free_annual), calc_b, "approximation",
                             caveat=proxy["caveat"])
                     udc = risk_mod.up_down_capture(daily_rets, bench_rets)
                     pb.fact("up_capture", udc["up_capture"], calc_b, "approximation",

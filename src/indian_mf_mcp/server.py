@@ -46,6 +46,7 @@ def get_fund_performance(
     rolling_windows: list[int] | None = None,
     nav_series: bool = False,
     provenance: str = "compact",
+    risk_free_annual: float | None = None,
 ) -> dict:
     """Complete return/risk evidence pack for one or more schemes (list = comparison).
 
@@ -55,13 +56,20 @@ def get_fund_performance(
     proxy fund; never presented as the licensed index itself), "category" (computed live
     from the full ingested universe).
     Defaults to the Direct/Growth plan; a warning is included if that plan does not exist.
+    IDCW (dividend) plans are refused for return analytics with an explicit error — AMFI
+    NAV for IDCW plans is not distribution-adjusted, so computing CAGR from it would
+    silently understate returns. Request a Growth plan instead.
+    risk_free_annual: overrides the stated-constant risk-free rate used for Sharpe/Sortino/
+    alpha (default in config.DEFAULT_RISK_FREE_RATE_ANNUAL). Sharpe is only comparable
+    across funds computed with the SAME rate — pin this explicitly for any comparison that
+    spans a period where the real rate moved.
     Never emits a score, rating, or recommendation — only computed facts with provenance.
     """
     with connect() as conn:
         return _get_fund_performance(
             conn, scheme_ids, plan=plan, period=period, comparators=comparators,
             metrics=metrics, rolling_windows=rolling_windows, nav_series=nav_series,
-            provenance=provenance,
+            provenance=provenance, risk_free_annual=risk_free_annual,
         )
 
 
