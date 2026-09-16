@@ -168,6 +168,11 @@ def main() -> None:
 
         with connect() as conn:
             stats = run_daily_ingest(conn)
+            # SQLite's query planner makes poor index choices on large tables (nav_point is
+            # tens of millions of rows) without fresh stats — cheap to run, and this is
+            # exactly the workload shape (full-universe scans in get_fund_performance's
+            # category comparator) where a stale plan costs seconds per call.
+            conn.execute("ANALYZE")
         json.dump(stats, sys.stdout, indent=2)
         print()
         if stats.get("warnings"):
@@ -189,6 +194,7 @@ def main() -> None:
                 conn, start, end, universes=universes, force=args.force,
                 progress=lambda msg: print(msg, file=sys.stderr, flush=True),
             )
+            conn.execute("ANALYZE")
         json.dump(stats, sys.stdout, indent=2)
         print()
         if stats.get("warnings"):

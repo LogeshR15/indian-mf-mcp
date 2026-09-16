@@ -21,6 +21,14 @@ from indian_mf_mcp.store import repository as repo
 
 STANDARD_HORIZONS = [1, 3, 5, 7, 10]
 
+# The stated rule for "N years ago" when there's no NAV point exactly on that calendar
+# date (weekend, holiday, a per-AMC filing gap): use the LAST AVAILABLE NAV ON OR BEFORE
+# the target date (returns.NavSeries.value_on_or_before) — never interpolated, never
+# rounded forward to the next available date. This is applied identically to the fund and
+# to its benchmark proxy (both route through analytics.returns.cagr), so a one-day
+# calendar mismatch on a volatile date cannot bias the fund-vs-benchmark comparison.
+CALENDAR_RULE = "last_available_nav_on_or_before_target_date"
+
 
 _KNOWN_PLANS = {
     "direct_growth": ("Direct", "Growth"),
@@ -240,10 +248,12 @@ def get_fund_performance(
                 start = effective_as_of - timedelta(days=int(h * 365.25))
                 val = R.cagr(series, start, effective_as_of)
                 calc = pb.add_calc(method="cagr_daily_nav", inputs=[src_nav],
-                                    params={"plan": plan, "horizon_years": h, "as_of": effective_as_of.isoformat()})
+                                    params={"plan": plan, "horizon_years": h, "as_of": effective_as_of.isoformat(),
+                                            "calendar_rule": CALENDAR_RULE})
                 pb.fact(f"cagr_{h}y", val, calc, "calculated")
             si_val = R.since_inception_cagr(series)
-            calc = pb.add_calc(method="cagr_since_inception", inputs=[src_nav])
+            calc = pb.add_calc(method="cagr_since_inception", inputs=[src_nav],
+                                params={"calendar_rule": CALENDAR_RULE})
             pb.fact("cagr_since_inception", si_val, calc, "calculated")
 
         daily_rets = R.daily_returns(series)
@@ -269,7 +279,8 @@ def get_fund_performance(
             for w in rolling_windows:
                 rr = R.rolling_returns(series, w)
                 rolling_out[f"{w}Y"] = R.rolling_return_distribution(rr)
-            calc = pb.add_calc(method="rolling_returns", inputs=[src_nav], params={"windows_years": rolling_windows})
+            calc = pb.add_calc(method="rolling_returns", inputs=[src_nav],
+                                params={"windows_years": rolling_windows, "calendar_rule": CALENDAR_RULE})
             pb.fact("rolling_returns", rolling_out, calc, "calculated")
 
         if "drawdown" in metrics:
@@ -354,7 +365,8 @@ def get_fund_performance(
                     bval = benchmark_cagr(proxy, start, effective_as_of)
                     bench_trailing[f"{h}Y"] = bval
                 calc = pb.add_calc(method="cagr_benchmark_proxy", inputs=[src_bench],
-                                    params={"horizons_years": STANDARD_HORIZONS})
+                                    params={"horizons_years": STANDARD_HORIZONS,
+                                            "calendar_rule": CALENDAR_RULE})
                 pb.fact("benchmark_cagr_trailing", bench_trailing, calc, "approximation",
                         caveat=proxy["caveat"])
 

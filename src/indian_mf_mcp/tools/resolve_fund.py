@@ -25,6 +25,44 @@ def _confidence_for(row: sqlite3.Row, query: str) -> float:
     return 0.5
 
 
+def _availability_for_scheme(conn: sqlite3.Connection, scheme_id: str, plan_ids: list[str]) -> dict:
+    """What can actually be answered for this scheme right now.
+
+    Four of the six MCP tools read from tables that are often empty for a given scheme
+    (portfolio/factsheet/document ingestion is per-scheme, opt-in, and separate from the
+    NAV backfill). Without this, a caller has no way to know a scheme is answerable for
+    performance but not for holdings/costs/documents short of calling the tool, getting an
+    explicit error, and burning a round trip. Surfacing it here lets a client skip calls it
+    already knows will fail.
+    """
+    has_portfolio = conn.execute(
+        "SELECT 1 FROM portfolio_snapshot WHERE scheme_id = ? LIMIT 1", (scheme_id,)
+    ).fetchone() is not None
+    has_factsheet = conn.execute(
+        "SELECT 1 FROM manager_assignment WHERE scheme_id = ? LIMIT 1", (scheme_id,)
+    ).fetchone() is not None or conn.execute(
+        "SELECT 1 FROM ter_history th JOIN plan p ON p.plan_id = th.plan_id "
+        "WHERE p.scheme_id = ? LIMIT 1", (scheme_id,)
+    ).fetchone() is not None
+    has_documents = conn.execute(
+        "SELECT 1 FROM document WHERE scheme_id = ? LIMIT 1", (scheme_id,)
+    ).fetchone() is not None
+    nav_coverage_end = None
+    if plan_ids:
+        placeholders = ",".join("?" * len(plan_ids))
+        row = conn.execute(
+            f"SELECT MAX(date) AS d FROM nav_point WHERE plan_id IN ({placeholders})",
+            plan_ids,
+        ).fetchone()
+        nav_coverage_end = row["d"] if row else None
+    return {
+        "has_portfolio": has_portfolio,
+        "has_factsheet": has_factsheet,
+        "has_documents": has_documents,
+        "nav_coverage_end": nav_coverage_end,
+    }
+
+
 def _candidate_for_scheme(conn: sqlite3.Connection, rows: list[sqlite3.Row], query: str) -> dict:
     first = rows[0]
     plans = []
@@ -48,6 +86,7 @@ def _candidate_for_scheme(conn: sqlite3.Connection, rows: list[sqlite3.Row], que
         "inception_date": first["inception_date"],
         "active": bool(first["scheme_active"]),
         "plans": plans,
+        "availability": _availability_for_scheme(conn, first["scheme_id"], [r["plan_id"] for r in rows]),
         "confidence": max(_confidence_for(r, query) for r in rows),
     }
 

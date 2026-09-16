@@ -87,6 +87,19 @@ def seeded_db_path(tmp_path_factory):
     return path
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _reset_shared_connection_once(seeded_db_path):
+    """server.py caches ONE process-wide read connection (db.get_shared_read_connection).
+    Force it to (re)open against this file's seeded DB before any test in this module runs
+    it, and close it again afterwards — otherwise a connection cached by an earlier test
+    module (pointed at a different config.DB_PATH) would silently leak into these tests."""
+    from indian_mf_mcp.store import db as db_mod
+
+    db_mod.reset_shared_read_connection()
+    yield
+    db_mod.reset_shared_read_connection()
+
+
 @pytest.fixture(autouse=True)
 def _point_at_seeded_db(seeded_db_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", seeded_db_path)

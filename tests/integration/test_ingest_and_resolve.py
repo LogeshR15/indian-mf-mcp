@@ -20,6 +20,14 @@ def test_ingest_then_resolve_by_name_and_isin(tmp_path):
     assert len(candidates) == 1
     assert candidates[0]["amc"] == "Parag Parikh Financial Advisory Services Private Limited"
     assert len(candidates[0]["plans"]) == 2
+    # A scheme with only NAV ingested (no portfolio/factsheet/document backfill run) must
+    # say so up front, rather than the caller discovering it via a wasted round trip.
+    avail = candidates[0]["availability"]
+    assert avail == {
+        "has_portfolio": False, "has_factsheet": False, "has_documents": False,
+        "nav_coverage_end": avail["nav_coverage_end"],  # exact date depends on the fixture
+    }
+    assert avail["nav_coverage_end"] is not None
 
     by_isin = resolve_fund(conn, "INF879O01027", limit=5)
     assert by_isin["INF879O01027"][0]["scheme_id"] == candidates[0]["scheme_id"]

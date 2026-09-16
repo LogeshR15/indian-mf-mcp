@@ -1,0 +1,428 @@
+{
+  "get_document": {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "inputSchema": {
+      "properties": {
+        "as_of": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "As Of"
+        },
+        "doc_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Doc Id"
+        },
+        "doc_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Doc Type"
+        },
+        "max_chars": {
+          "default": 15000,
+          "title": "Max Chars",
+          "type": "integer"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "return_": {
+          "default": "text",
+          "title": "Return",
+          "type": "string"
+        },
+        "scheme_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scheme Id"
+        },
+        "sections": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sections"
+        }
+      },
+      "title": "get_documentArguments",
+      "type": "object"
+    }
+  },
+  "get_fund_performance": {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "inputSchema": {
+      "properties": {
+        "comparators": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparators"
+        },
+        "metrics": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metrics"
+        },
+        "nav_series": {
+          "default": false,
+          "title": "Nav Series",
+          "type": "boolean"
+        },
+        "period": {
+          "default": "10Y",
+          "title": "Period",
+          "type": "string"
+        },
+        "plan": {
+          "default": "direct_growth",
+          "title": "Plan",
+          "type": "string"
+        },
+        "provenance": {
+          "default": "compact",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "risk_free_annual": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Risk Free Annual"
+        },
+        "rolling_windows": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rolling Windows"
+        },
+        "scheme_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scheme Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scheme_ids"
+      ],
+      "title": "get_fund_performanceArguments",
+      "type": "object"
+    }
+  },
+  "get_fund_portfolio": {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "inputSchema": {
+      "properties": {
+        "as_of": {
+          "default": "latest",
+          "title": "As Of",
+          "type": "string"
+        },
+        "compare_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "prev_month",
+          "title": "Compare To"
+        },
+        "history": {
+          "default": "none",
+          "title": "History",
+          "type": "string"
+        },
+        "holdings_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Holdings Limit"
+        },
+        "provenance": {
+          "default": "compact",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "scheme_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scheme Ids",
+          "type": "array"
+        },
+        "sections": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sections"
+        }
+      },
+      "required": [
+        "scheme_ids"
+      ],
+      "title": "get_fund_portfolioArguments",
+      "type": "object"
+    }
+  },
+  "get_fund_profile": {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "inputSchema": {
+      "properties": {
+        "as_of": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "As Of"
+        },
+        "provenance": {
+          "default": "compact",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "scheme_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scheme Ids",
+          "type": "array"
+        },
+        "sections": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sections"
+        }
+      },
+      "required": [
+        "scheme_ids"
+      ],
+      "title": "get_fund_profileArguments",
+      "type": "object"
+    }
+  },
+  "list_disclosure_events": {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "inputSchema": {
+      "properties": {
+        "event_types": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Types"
+        },
+        "provenance": {
+          "default": "compact",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "scheme_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scheme Ids",
+          "type": "array"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since"
+        }
+      },
+      "required": [
+        "scheme_ids"
+      ],
+      "title": "list_disclosure_eventsArguments",
+      "type": "object"
+    }
+  },
+  "resolve_fund": {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "default": 10,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "title": "Query"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "resolve_fundArguments",
+      "type": "object"
+    }
+  }
+}
