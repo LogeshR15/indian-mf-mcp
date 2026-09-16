@@ -7,6 +7,8 @@ in the AMC's own filenames or listing pages).
 Populated:
   1. Automatically during navall ingest — when we see a scheme for the first time, we
      store its normalised name as the adapter hint (good enough for ~80% of adapters).
+     Rows are keyed by the AMFI-derived `scheme.amc_id`; get_schemes_for_amc translates a
+     CLI adapter key onto that namespace via ingest/amc_identity.py.
   2. Explicitly via 'mf-mcp register-scheme-hint' for schemes where the AMC uses a
      different naming convention.
 
@@ -18,6 +20,8 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+
+from indian_mf_mcp.ingest import amc_identity
 
 
 def _now() -> str:
@@ -51,20 +55,29 @@ def upsert_scheme_hint(
 # Read
 # ---------------------------------------------------------------------------
 
-def get_schemes_for_amc(conn: sqlite3.Connection, amc_id: str) -> list[dict]:
+def get_schemes_for_amc(conn: sqlite3.Connection, amc: str) -> list[dict]:
     """Return all schemes with a registered adapter hint for the given AMC.
+
+    `amc` is an adapter key as the CLI takes it ("ppfas", "bank-of-india"); it is
+    translated to the AMFI-derived amc_id(s) the store actually files schemes under.
+    Passing a raw amc_id works too, so existing callers and tests keep working.
 
     Returns list of dicts: [{scheme_id, name, adapter_hint, category, sub_category, active}]
     Sorted by scheme name for deterministic output.
     """
+    # `amc` itself stays in the candidate list: rows written by `register-scheme-hint
+    # --amc ppfas` before adapter-key translation existed are keyed by the bare adapter
+    # key, and must keep resolving rather than silently disappearing on upgrade.
+    amc_ids = [amc, *amc_identity.amc_ids_for_adapter(amc)] if amc in amc_identity.AMFI_AMC_NAME else [amc]
+    placeholders = ",".join("?" * len(amc_ids))
     rows = conn.execute(
-        """SELECT sah.scheme_id, sah.adapter_hint,
-                  s.name, s.category, s.sub_category, s.active
-           FROM scheme_adapter_hint sah
-           JOIN scheme s ON s.scheme_id = sah.scheme_id
-           WHERE sah.amc_id = ?
-           ORDER BY s.name""",
-        (amc_id,),
+        f"""SELECT sah.scheme_id, sah.adapter_hint,
+                   s.name, s.category, s.sub_category, s.active
+            FROM scheme_adapter_hint sah
+            JOIN scheme s ON s.scheme_id = sah.scheme_id
+            WHERE sah.amc_id IN ({placeholders})
+            ORDER BY s.name""",
+        amc_ids,
     ).fetchall()
     return [dict(r) for r in rows]
 

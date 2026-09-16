@@ -16,6 +16,7 @@ from indian_mf_mcp.analytics.overlap import OverlapResult, all_pairs_overlap
 from indian_mf_mcp.change_engine.concentration import concentration_stats
 from indian_mf_mcp.change_engine.persistence import compute_persistence
 from indian_mf_mcp.change_engine.portfolio_diff import detect_disclosure_gap, diff_snapshots
+from indian_mf_mcp.ingest import amc_identity
 from indian_mf_mcp.ingest.amfi_caplist import compute_market_cap_allocation
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
 from indian_mf_mcp.store import portfolio_repository as prepo
@@ -74,12 +75,17 @@ def _staleness_warning(conn: sqlite3.Connection, amc_id: str | None, snapshot_da
         gap = (today - snap_date).days
         if gap <= _STALENESS_THRESHOLD_DAYS:
             return None
-        # Check adapter health table for additional context
-        if amc_id:
+        # Check adapter health table for additional context. `adapter_health` is keyed by
+        # the adapter's own amc_id ("amc-ppfas"), not the AMFI-derived scheme.amc_id
+        # ("amc-ppfas-mutual-fund") we hold here — querying with the latter matched nothing,
+        # so this branch never fired and every stale portfolio got the generic message.
+        health_ids = amc_identity.health_lookup_ids(amc_id)
+        if health_ids:
+            placeholders = ",".join("?" * len(health_ids))
             health = conn.execute(
-                "SELECT status, checked_at, error FROM adapter_health "
-                "WHERE amc_id = ? AND doc_type = 'monthly_portfolio' LIMIT 1",
-                (amc_id,),
+                f"SELECT status, checked_at, error FROM adapter_health "
+                f"WHERE amc_id IN ({placeholders}) AND doc_type = 'monthly_portfolio' LIMIT 1",
+                health_ids,
             ).fetchone()
             if health:
                 status = health["status"]

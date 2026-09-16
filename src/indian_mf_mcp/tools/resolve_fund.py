@@ -103,15 +103,38 @@ def resolve_one(conn: sqlite3.Connection, query: str, limit: int) -> list[dict]:
     return candidates[:limit]
 
 
+def _store_is_empty(conn: sqlite3.Connection) -> bool:
+    return conn.execute("SELECT 1 FROM plan LIMIT 1").fetchone() is None
+
+
 def resolve_fund(conn: sqlite3.Connection, query, limit: int = 10) -> dict:
     queries = query if isinstance(query, list) else [query]
     results = {}
+    # An un-ingested store answers every query with zero candidates, which the per-query
+    # warning below would report as "verify spelling" — pointing the user at their input
+    # when the real problem is that no scheme universe has been loaded yet. Distinguishing
+    # the two is the difference between a 10-second fix and a confused bug report.
+    store_empty = _store_is_empty(conn)
     for q in queries:
-        candidates = resolve_one(conn, q, limit)
+        candidates = [] if store_empty else resolve_one(conn, q, limit)
         results[q] = candidates
-        if not candidates:
-            results.setdefault("_warnings", []).append(
-                f"No match found for {q!r}. Do not assume the fund does not exist — "
-                "the local index may not yet include it; verify spelling or try an ISIN/scheme code."
-            )
+        if candidates:
+            continue
+        if store_empty:
+            # One warning for the whole batch, not one per query — the cause is identical
+            # for every entry. Keys for the remaining queries are still populated below,
+            # so the caller's per-query lookup never KeyErrors.
+            warnings = results.setdefault("_warnings", [])
+            if not warnings:
+                warnings.append(
+                    "The local store contains no schemes — nothing has been ingested yet, so "
+                    "this is not a statement about whether the fund exists. Run "
+                    "'mf-mcp setup' (or 'mf-mcp ingest-navall' for the scheme universe alone), "
+                    "then retry. 'mf-mcp status' shows what is loaded."
+                )
+            continue
+        results.setdefault("_warnings", []).append(
+            f"No match found for {q!r}. Do not assume the fund does not exist — "
+            "the local index may not yet include it; verify spelling or try an ISIN/scheme code."
+        )
     return results

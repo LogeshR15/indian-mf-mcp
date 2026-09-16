@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
+import shlex
 import sys
 
 _AMC_CHOICES = [
@@ -15,9 +17,180 @@ _AMC_CHOICES = [
 ]
 
 
+def _amc_ids(adapter_key: str) -> list[str]:
+    from indian_mf_mcp.ingest.amc_identity import amc_ids_for_adapter
+    return amc_ids_for_adapter(adapter_key)
+
+
+def _cmd_resolve(args) -> None:
+    """Print scheme_ids for a query.
+
+    Exists because every backfill command takes --scheme-id, but scheme_id was previously
+    obtainable only by starting the MCP server and asking a model — a chicken-and-egg that
+    made the documented setup path impossible to follow from a shell.
+    """
+    from indian_mf_mcp.store.db import connect
+    from indian_mf_mcp.tools.resolve_fund import resolve_fund
+
+    with connect() as conn:
+        payload = resolve_fund(conn, args.query, limit=args.limit)
+
+    if args.as_json:
+        json.dump(payload, sys.stdout, indent=2)
+        print()
+        return
+
+    candidates = payload.get(args.query) or []
+    for warning in payload.get("_warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
+    if not candidates:
+        sys.exit(1)
+
+    for cand in candidates:
+        plans = cand["plans"]
+        avail = cand["availability"]
+        have = [name for name, key in (
+            ("portfolio", "has_portfolio"), ("factsheet", "has_factsheet"),
+            ("documents", "has_documents"),
+        ) if avail[key]]
+        print(f"{cand['canonical_name']}")
+        print(f"  scheme_id    {cand['scheme_id']}")
+        print(f"  amc          {cand['amc']}")
+        print(f"  category     {cand['category']} / {cand['sub_category']}")
+        print(f"  plans        {len(plans)}  "
+              + ", ".join(
+                  f"{p['plan_type'] or '?'}/{p['option_type'] or '?'}"
+                  for p in plans[:4]
+              )
+              + (" ..." if len(plans) > 4 else ""))
+        print(f"  nav through  {avail['nav_coverage_end'] or 'none'}")
+        print(f"  also loaded  {', '.join(have) if have else 'nav only'}")
+        print()
+
+
+def _cmd_setup(args) -> None:
+    """Run the ingest steps a usable store needs, in dependency order, resumably.
+
+    Each step is skipped when already satisfied, so rerunning after an interrupted run
+    (or to widen --years) costs only the work that is actually missing.
+    """
+    from datetime import date as _date, timedelta
+
+    from indian_mf_mcp.store import inventory
+    from indian_mf_mcp.store.db import connect
+
+    def step(n: int, total: int, msg: str) -> None:
+        print(f"[{n}/{total}] {msg}", file=sys.stderr, flush=True)
+
+    total = 2 if args.skip_nav_history else 3
+
+    # --- 1. scheme universe -------------------------------------------------
+    step(1, total, "Scheme universe — fetching AMFI NAVAll.txt ...")
+    from indian_mf_mcp.ingest.amfi_navall import run_daily_ingest
+
+    with connect() as conn:
+        stats = run_daily_ingest(conn)
+        conn.execute("ANALYZE")
+    if stats.get("warnings"):
+        for w in stats["warnings"]:
+            print(f"      warning: {w}", file=sys.stderr)
+    print(
+        f"      {stats['schemes']:,} schemes / {stats['plans']:,} plans "
+        f"across {stats['amcs']} AMCs",
+        file=sys.stderr,
+    )
+
+    # --- 2. cap list --------------------------------------------------------
+    step(2, total, "AMFI cap list — for market-cap allocation ...")
+    from indian_mf_mcp.ingest.amfi_caplist import fetch_and_store_caplist
+
+    try:
+        with connect() as conn:
+            cap = fetch_and_store_caplist(conn)
+        if cap.get("skipped"):
+            print("      already current", file=sys.stderr)
+        else:
+            print(
+                f"      {cap['isin_count']:,} ISINs, effective {cap['effective_date']}",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001
+        # A cap-list failure must not abort setup: it degrades exactly one section of one
+        # tool, which already reports itself as unavailable.
+        print(f"      failed: {exc}", file=sys.stderr)
+        print("      market-cap allocation stays unavailable; "
+              "retry later with 'mf-mcp update-caplist'", file=sys.stderr)
+
+    # --- 3. NAV history -----------------------------------------------------
+    if args.skip_nav_history:
+        print("\nSkipped NAV history. resolve_fund and get_fund_profile work; "
+              "return/risk analytics need it.", file=sys.stderr)
+    else:
+        since = _date.today() - timedelta(days=round(args.years * 365.25))
+        step(3, total, f"NAV history — {args.years}y from {since} (resumable; Ctrl-C is safe) ...")
+        from indian_mf_mcp.ingest.amfi_nav_history import backfill_nav_history
+
+        with connect() as conn:
+            hist = backfill_nav_history(
+                conn, since, _date.today(), universes=("1", "2", "3"), force=False,
+                progress=lambda msg: print(f"      {msg}", file=sys.stderr, flush=True),
+            )
+            conn.execute("ANALYZE")
+        for w in hist.get("warnings", []):
+            print(f"      warning: {w}", file=sys.stderr)
+
+    # --- report -------------------------------------------------------------
+    with connect() as conn:
+        inv = inventory.collect(conn)
+    steps = inventory.next_steps(inv)
+    print()
+    print(inventory.format_report(inv, steps))
+    print()
+    print("Connect it to Claude Code:", file=sys.stderr)
+    # shlex.quote because the checkout path routinely contains spaces; an unquoted
+    # --directory silently truncates the path and the client fails with a confusing
+    # "no such directory" long after setup reported success.
+    print("  claude mcp add indian-mf -- uv run --directory "
+          f"{shlex.quote(str(pathlib.Path.cwd()))} mf-mcp serve", file=sys.stderr)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="mf-mcp")
+    parser = argparse.ArgumentParser(
+        prog="mf-mcp",
+        description="Indian mutual fund evidence store. First run: 'mf-mcp setup', "
+                    "then 'mf-mcp serve'. 'mf-mcp status' shows what is loaded.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    # ---- Onboarding ----
+    setup_cmd = sub.add_parser(
+        "setup",
+        help="One-command first-run bootstrap: scheme universe + cap list + NAV history",
+    )
+    setup_cmd.add_argument(
+        "--years", type=int, default=3,
+        help="Years of daily NAV history to backfill (default: 3, ~8 min). "
+             "Use 10 for the full decade (~35 min). Resumable — rerun with a larger "
+             "value later to extend.",
+    )
+    setup_cmd.add_argument(
+        "--skip-nav-history", action="store_true",
+        help="Stop after the scheme universe and cap list (seconds, no long download). "
+             "resolve_fund works; return analytics will not.",
+    )
+
+    sub.add_parser("status", help="Show what is ingested and what to run next")
+
+    resolve_cmd = sub.add_parser(
+        "resolve",
+        help="Look up a fund by name/ISIN/scheme code and print its scheme_id",
+    )
+    resolve_cmd.add_argument("query", help="Fund name, ISIN, or AMFI scheme code")
+    resolve_cmd.add_argument("--limit", type=int, default=5, help="Max matches (default: 5)")
+    resolve_cmd.add_argument("--json", action="store_true", dest="as_json",
+                             help="Emit the raw resolve_fund payload instead of a table")
+
+    sub.add_parser("amcs", help="List AMC keys accepted by --amc, and their coverage")
 
     # ---- Phase 1 ----
     sub.add_parser("serve", help="Run the MCP server (stdio transport)")
@@ -162,6 +335,54 @@ def main() -> None:
         from indian_mf_mcp.server import main as serve_main
         serve_main()
 
+    elif args.command == "setup":
+        _cmd_setup(args)
+
+    elif args.command == "status":
+        from indian_mf_mcp.store import inventory
+        from indian_mf_mcp.store.db import connect
+
+        with connect() as conn:
+            inv = inventory.collect(conn)
+        steps = inventory.next_steps(inv)
+        print(inventory.format_report(inv, steps))
+        # Exit 1 when the store cannot answer anything at all, so a provisioning script
+        # or CI check can gate on it. A partially-populated store is exit 0: "no portfolio
+        # data for the AMCs you skipped" is a legitimate steady state, not a failure.
+        if not inv["plans"]:
+            sys.exit(1)
+
+    elif args.command == "resolve":
+        _cmd_resolve(args)
+
+    elif args.command == "amcs":
+        from indian_mf_mcp.ingest.amc_identity import AMFI_AMC_NAME
+        from indian_mf_mcp.ingest.amc_adapters.registry import list_amc_ids
+
+        print(f"{'--amc key':<22} {'AMFI name':<34} portfolio schemes loaded")
+        print("-" * 80)
+        from indian_mf_mcp.ingest.amc_scheme_registry import get_schemes_for_amc
+        from indian_mf_mcp.store.db import connect
+
+        with connect() as conn:
+            has_store = conn.execute("SELECT 1 FROM scheme LIMIT 1").fetchone() is not None
+            for key in list_amc_ids():
+                if has_store:
+                    loaded = conn.execute(
+                        """SELECT COUNT(DISTINCT ps.scheme_id) FROM portfolio_snapshot ps
+                           JOIN scheme s ON s.scheme_id = ps.scheme_id
+                           WHERE s.amc_id IN ({})""".format(
+                            ",".join("?" * len(_amc_ids(key)))
+                        ),
+                        _amc_ids(key),
+                    ).fetchone()[0]
+                    loaded_str = str(loaded)
+                else:
+                    loaded_str = "-"
+                print(f"{key:<22} {AMFI_AMC_NAME[key][:34]:<34} {loaded_str:>8}")
+        print(f"\n{len(list_amc_ids())} adapters. Load one with: "
+              f"mf-mcp backfill --amc <key> --from 2023-01-01")
+
     elif args.command == "ingest-navall":
         from indian_mf_mcp.ingest.amfi_navall import run_daily_ingest
         from indian_mf_mcp.store.db import connect
@@ -290,8 +511,19 @@ def main() -> None:
         from indian_mf_mcp.store.db import connect
 
         print("Fetching AMFI stock categorisation list...", file=sys.stderr)
-        with connect() as conn:
-            stats = fetch_and_store_caplist(conn)
+        try:
+            with connect() as conn:
+                stats = fetch_and_store_caplist(conn)
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: could not fetch the AMFI cap list: {exc}", file=sys.stderr)
+            print(
+                "\nThis affects only get_fund_portfolio's market-cap allocation section, "
+                "which reports itself as unavailable rather than guessing — every other "
+                "tool is unaffected.\nIf this is a 404, AMFI has moved the file: see "
+                "docs/amc-coverage.md and open an issue with the new URL.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         json.dump(stats, sys.stdout, indent=2)
         print()
         if stats.get("skipped"):

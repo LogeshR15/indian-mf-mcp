@@ -7,26 +7,22 @@ ever be reconstructable.
 from __future__ import annotations
 
 import hashlib
-import re
 import sqlite3
 from datetime import date, datetime, timezone
 
 import httpx
 
 from indian_mf_mcp import config
+from indian_mf_mcp.ingest.amc_identity import amc_id_for, slug as _slug
+from indian_mf_mcp.ingest.amc_scheme_registry import auto_register_from_navall
 from indian_mf_mcp.normalize.taxonomy import parse_plan_option, parse_plan_option_columns
 from indian_mf_mcp.parsers.delimited import NavRow, parse_amfi_date, parse_navall
 from indian_mf_mcp.store import repository as repo
 
-_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
-
-
-def _slug(text: str) -> str:
-    return _NON_ALNUM_RE.sub("-", text.lower()).strip("-")
-
-
-def amc_id_for(amc_name: str) -> str:
-    return f"amc-{_slug(amc_name)}"
+# amc_id_for / _slug now live in amc_identity, which is also what maps these ids back to
+# adapter keys. Re-exported here because this module was their original home.
+__all__ = ["amc_id_for", "fetch_navall", "archive_raw", "ingest_rows", "run_daily_ingest",
+           "scheme_id_for"]
 
 
 def scheme_id_for(amc_name: str, base_scheme_name: str) -> str:
@@ -117,8 +113,16 @@ def ingest_rows(conn: sqlite3.Connection, rows: list[NavRow], as_of: date) -> di
             "AMFI's NAVAll.txt layout has likely changed; check parsers/delimited.py"
         )
 
+    # Register the scheme -> adapter-hint rows that 'mf-mcp backfill --amc <amc>' drives
+    # off. This was written but never called from any ingest path, so scheme_adapter_hint
+    # stayed empty on every install and the bulk backfill always exited "no schemes
+    # registered". It belongs here: the hint defaults to the scheme's AMFI name, which is
+    # exactly what this function has just written.
+    hints = auto_register_from_navall(conn)
+
     return {"amcs": len(seen_amcs), "schemes": len(seen_schemes), "plans": n_plans,
-            "nav_points": len(nav_batch), "warnings": warnings}
+            "nav_points": len(nav_batch), "adapter_hints_registered": hints,
+            "warnings": warnings}
 
 
 def run_daily_ingest(conn: sqlite3.Connection, raw: bytes | None = None, as_of: date | None = None) -> dict:

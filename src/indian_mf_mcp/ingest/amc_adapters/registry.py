@@ -116,3 +116,17 @@ def get_adapter(amc_key: str):
     """Returns (adapter_instance, sheet_resolver_or_None)."""
     adapter_cls, resolver = ADAPTERS[amc_key]
     return adapter_cls(), resolver
+
+
+def list_amc_ids() -> list[str]:
+    """Every adapter key that can be passed to --amc, sorted for deterministic output."""
+    return sorted(ADAPTERS)
+
+
+def adapter_key_for(adapter) -> str | None:
+    """Reverse an adapter instance/class back to the key it is registered under."""
+    cls = adapter if isinstance(adapter, type) else type(adapter)
+    for key, (adapter_cls, _) in ADAPTERS.items():
+        if adapter_cls is cls:
+            return key
+    return None

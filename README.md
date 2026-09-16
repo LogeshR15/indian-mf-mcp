@@ -52,40 +52,79 @@ cd indian-mf-mcp
 uv sync
 ```
 
-Populate the local store — NAV first, since everything else resolves against that universe:
+One command bootstraps a usable store — scheme universe, AMFI cap list, and NAV history:
 
 ```bash
-uv run mf-mcp ingest-navall
+uv run mf-mcp setup
 ```
+
+That defaults to **3 years** of daily NAV (~8 min). Pass `--years 10` for the full decade
+(~35 min, ~17M points), or `--skip-nav-history` to stop after the scheme universe and be
+querying in seconds. Every step is resumable and idempotent: completed months are recorded,
+so an interrupted run — or a later `--years 10` to widen the window — does only the work
+that is actually missing.
+
+Check what you have at any time:
 
 ```bash
-uv run mf-mcp backfill-nav-history --from 2016-01-01
+uv run mf-mcp status
 ```
 
-The history backfill downloads roughly a decade of daily NAVs (~17M points, about 35 minutes).
-It is resumable and idempotent: completed months are recorded, so an interrupted run picks up
-where it stopped instead of re-downloading gigabytes. Run it once.
+It prints row counts and coverage windows per data class, then a numbered list of exactly
+which commands would fill the remaining gaps. It exits non-zero only when the store cannot
+answer anything at all, so you can gate a provisioning script on it.
 
-Then load portfolio holdings for whichever funds you care about:
+### Load portfolio holdings
+
+NAV and scheme identity cover every scheme; holdings are per-AMC and opt-in. Load an AMC in
+one command — no scheme IDs to look up:
 
 ```bash
-uv run mf-mcp backfill-portfolio --amc ppfas --scheme-id <from resolve_fund> --scheme-hint "Parag Parikh Flexi Cap Fund" --from 2019-01-01
+uv run mf-mcp backfill --amc ppfas --from 2023-01-01
 ```
 
-Finally, run the server:
+`uv run mf-mcp amcs` lists all 31 supported AMC keys and how many schemes you have loaded
+for each. Add `--doc-types portfolio,factsheet,addendum` to pull manager/TER history and
+official change notices in the same pass.
+
+### Run the server
 
 ```bash
 uv run mf-mcp serve
 ```
 
-Data lives in `~/.indian-mf-mcp/` — a SQLite store plus a never-evicted raw archive. Override
-the location with `INDIAN_MF_MCP_HOME`.
+Data lives in `~/.indian-mf-mcp/` — a SQLite store plus a never-evicted raw archive.
+Override the location with `INDIAN_MF_MCP_HOME`.
 
 ### Connect it to Claude Code
 
 ```bash
 claude mcp add indian-mf -- uv run --directory /path/to/indian-mf-mcp mf-mcp serve
 ```
+
+`mf-mcp setup` prints this line with your own path already filled in and shell-quoted.
+
+### Working with scheme IDs
+
+Every per-scheme command takes a `--scheme-id`. Get one from the shell:
+
+```bash
+uv run mf-mcp resolve "parag parikh flexi cap"
+```
+
+```
+Parag Parikh Flexi Cap Fund
+  scheme_id    scheme-d41895e60e6fd859
+  amc          PPFAS Mutual Fund
+  category     Equity Scheme / Flexi Cap Fund
+  plans        4  Direct/Growth, Direct/IDCW, Regular/Growth, Regular/IDCW
+  nav through  2026-09-15
+  also loaded  nav only
+```
+
+`also loaded` is the same availability flag `resolve_fund` returns to a model, so you can
+see at a glance which tools will have data for that scheme. Add `--json` for the raw
+payload.
 
 ---
 
@@ -116,11 +155,14 @@ In keeping with "gaps are reported, never filled," worth stating plainly here to
   disclosures instead of a spreadsheet; those are detected and skipped rather than
   mis-parsed — the spec only calls for spreadsheet-format portfolio parsing (PDF extraction
   is reserved for SIDs, factsheets, and addenda, which `get_document` already covers).
-- **Market-cap allocation (large/mid/small) requires a one-time setup step.** Run
-  `uv run mf-mcp update-caplist` to populate AMFI's half-yearly stock categorisation; until
-  then, `get_fund_portfolio`'s market-cap section reports unavailable rather than guessing.
-  The join itself is version-stamped and point-in-time-safe — a 2021 portfolio is never
-  reclassified against a newer cap list.
+- **Market-cap allocation (large/mid/small) is currently unavailable upstream.** AMFI
+  rebuilt its site and the half-yearly stock-categorisation spreadsheet no longer resolves
+  at its documented URL (`portal.amfiindia.com/spages/acStockCategorization.xlsx` returns
+  404), so `mf-mcp update-caplist` fails and `get_fund_portfolio`'s market-cap section
+  reports unavailable rather than guessing. `mf-mcp setup` treats this as non-fatal and
+  continues — it degrades exactly one section of one tool. The parser and the
+  point-in-time join are unaffected and version-stamped, so a 2021 portfolio is never
+  reclassified against a newer list; only the fetch needs a new source URL.
 - **Addendum ingestion (`mf-mcp ingest-addendum` / `backfill-addenda`) covers manager, TER,
   benchmark and category-change notices, but relies on regex extraction over PDF/HTML text**,
   so a differently-worded notice can be missed. `list_disclosure_events` combines these
@@ -155,6 +197,12 @@ src/indian_mf_mcp/
 └── tools/           the six MCP tools
 ```
 
+Operationally the CLI splits in two: `setup` / `status` / `resolve` / `amcs` are the
+onboarding surface, and `ingest-*` / `backfill*` / `health` are the data-loading surface.
+`ingest/amc_identity.py` is the single place that reconciles the three AMC naming schemes
+in play — the `--amc` adapter key (`ppfas`), the id an adapter declares (`amc-ppfas`), and
+the id the store derives from AMFI's own name (`amc-ppfas-mutual-fund`).
+
 `spec.md` holds the full architecture rationale, including which facts are deliberately *not*
 computable from Indian public disclosure and why.
 
@@ -163,7 +211,7 @@ computable from Indian public disclosure and why.
 ## Running tests
 
 ```bash
-uv run pytest -q
+uv run pytest tests -q
 ```
 
 Unit tests are offline and run against golden fixtures — real AMC files committed to
