@@ -278,16 +278,28 @@ class TestFetchAndStoreCaplist:
     full fetch → blob-write → parse → DB-write path end to end, mocking only the network call.
     """
 
+    # One mock response serves both legs of the flow: discover_caplist_urls() reads .text
+    # off the listing page, then _ingest_one() reads .content off the spreadsheet.
+    _LISTING_HTML = (
+        '<a href="https://portal.amfiindia.com/spages/'
+        'AverageMarketCapitalization30Jun2026.xlsx">Download</a>'
+    )
+
     @staticmethod
     def _mock_response(raw: bytes) -> MagicMock:
         resp = MagicMock()
         resp.content = raw
+        resp.text = TestFetchAndStoreCaplist._LISTING_HTML
         resp.raise_for_status = MagicMock()
         return resp
 
     def _mock_client(self, raw: bytes) -> MagicMock:
         client = MagicMock()
-        client.__enter__.return_value.get.return_value = self._mock_response(raw)
+        resp = self._mock_response(raw)
+        # httpx.Client is used both as a context manager (discovery) and directly
+        # (the per-file fetch inside fetch_and_store_caplist).
+        client.__enter__.return_value.get.return_value = resp
+        client.get.return_value = resp
         return client
 
     def test_stores_blob_and_upserts_isin_market_cap(self, tmp_path, monkeypatch):
@@ -308,7 +320,10 @@ class TestFetchAndStoreCaplist:
 
         assert result["skipped"] is False
         assert result["isin_count"] == 2
+        assert result["versions_loaded"] == 1
         date.fromisoformat(result["effective_date"])  # valid ISO date
+        # The filename date wins over anything parsed out of the sheet body.
+        assert result["effective_date"] == "2026-06-30"
 
         doc = conn.execute(
             "SELECT * FROM document WHERE doc_type = 'caplist'"
@@ -344,5 +359,9 @@ class TestFetchAndStoreCaplist:
             second = fetch_and_store_caplist(conn)
 
         assert first["skipped"] is False
+        assert first["versions_loaded"] == 1
+        # Re-running discovers the same file, matches its sha256, and writes nothing.
         assert second["skipped"] is True
-        assert second["doc_id"] == first["doc_id"]
+        assert second["versions_loaded"] == 0
+        assert second["versions_skipped"] == 1
+        assert second["versions"][0]["doc_id"] == first["versions"][0]["doc_id"]

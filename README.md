@@ -52,7 +52,7 @@ cd indian-mf-mcp
 uv sync
 ```
 
-One command bootstraps a usable store — scheme universe, AMFI cap list, and NAV history:
+One command bootstraps a usable store — scheme universe, AMFI cap lists, and NAV history:
 
 ```bash
 uv run mf-mcp setup
@@ -155,14 +155,14 @@ In keeping with "gaps are reported, never filled," worth stating plainly here to
   disclosures instead of a spreadsheet; those are detected and skipped rather than
   mis-parsed — the spec only calls for spreadsheet-format portfolio parsing (PDF extraction
   is reserved for SIDs, factsheets, and addenda, which `get_document` already covers).
-- **Market-cap allocation (large/mid/small) is currently unavailable upstream.** AMFI
-  rebuilt its site and the half-yearly stock-categorisation spreadsheet no longer resolves
-  at its documented URL (`portal.amfiindia.com/spages/acStockCategorization.xlsx` returns
-  404), so `mf-mcp update-caplist` fails and `get_fund_portfolio`'s market-cap section
-  reports unavailable rather than guessing. `mf-mcp setup` treats this as non-fatal and
-  continues — it degrades exactly one section of one tool. The parser and the
-  point-in-time join are unaffected and version-stamped, so a 2021 portfolio is never
-  reclassified against a newer list; only the fetch needs a new source URL.
+- **Market-cap allocation (large/mid/small) covers 30 Jun 2022 onward.** `mf-mcp setup`
+  (or `mf-mcp update-caplist`) discovers every half-yearly stock-categorisation
+  spreadsheet AMFI has published and loads all nine, so the point-in-time join has a real
+  series to choose from — a 2023 portfolio is classified against the list that was in
+  force in 2023, never a newer one. Portfolios predating Jun 2022 report market cap as
+  unavailable rather than being classified against a list that did not yet exist. AMFI
+  publishes the ranking, not the buckets; the large/mid/small split applies SEBI's rank
+  rule (1–100 / 101–250 / 251+) to it.
 - **Addendum ingestion (`mf-mcp ingest-addendum` / `backfill-addenda`) covers manager, TER,
   benchmark and category-change notices, but relies on regex extraction over PDF/HTML text**,
   so a differently-worded notice can be missed. `list_disclosure_events` combines these

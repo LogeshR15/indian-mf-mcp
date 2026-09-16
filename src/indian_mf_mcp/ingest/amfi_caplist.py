@@ -8,14 +8,30 @@ Spec §3.6: market-cap allocation requires a point-in-time cap list; using today
 reclassify a 2021 portfolio produces false "style drift" signals. We version-stamp every copy
 fetched and always look up the version whose effective_date is <= the snapshot date.
 
-Primary URL (portal.amfiindia.com — plain static file, not SPA):
-  https://portal.amfiindia.com/spages/acStockCategorization.xlsx
+Source (rediscovered after AMFI's 2026 site rebuild): the listing page
 
-The file has two sheets:
-  - Sheet 1: "Large Cap" / "Mid Cap" / "Small Cap" sections with columns ISIN | Company Name
-  - Or a flat table with a "Market Cap" column; layout has varied historically.
+  https://www.amfiindia.com/otherdata/categorisation-of-stocks
 
-We handle both layouts via a flexible parser.
+links every half-yearly spreadsheet AMFI has published, not just the current one. The old
+hardcoded `spages/acStockCategorization.xlsx` began returning 404 in that rebuild; note the
+page uses the British spelling "categorisation", which is why the obvious URL guesses miss.
+
+Discovering from the listing page is strictly better than a single pinned URL: spec §3.6
+wants point-in-time classification, and one URL could only ever give us *today's* list, so
+every portfolio older than the first fetch got classified against the wrong list or not at
+all. Ingesting the whole archive (currently 30 Jun 2022 onward) is what makes
+get_market_cap()'s `effective_date <= as_of_date` lookup mean something.
+
+File layout (stable across the archive):
+  row 1   title, e.g. "Average Market Capitalization ... six months ended 30 June 2026"
+  row 2   header: Sr. No. | Company name | ISIN | BSE Symbol | BSE 6 month Avg ... | NSE Symbol
+  rows 3+ one company per row, DESCENDING by average market cap
+
+There is no cap-label column: AMFI publishes the ranking, and SEBI's categorisation rule
+(circular SEBI/HO/IMD/DF3/CIR/P/2017/114) defines the buckets by rank — 1-100 large cap,
+101-250 mid cap, 251+ small cap. We apply that rule to the ranked rows rather than guessing
+from company names. The older section-header and flat-table parsers are kept as fallbacks
+for any file that does carry explicit labels.
 """
 from __future__ import annotations
 
@@ -35,7 +51,33 @@ from indian_mf_mcp.store import blobstore
 
 log = logging.getLogger(__name__)
 
+# Listing page that indexes every published half-yearly spreadsheet.
+CAP_LIST_INDEX_URL = "https://www.amfiindia.com/otherdata/categorisation-of-stocks"
+
+# Retained only so existing `document.source_url` rows remain interpretable; nothing
+# fetches it any more (it 404s since AMFI's site rebuild).
 CAP_LIST_URL = "https://portal.amfiindia.com/spages/acStockCategorization.xlsx"
+
+# SEBI categorisation by rank on AMFI's average-market-cap ranking.
+_LARGE_CAP_MAX_RANK = 100
+_MID_CAP_MAX_RANK = 250
+
+# Filenames are inconsistent across vintages — "AverageMarketCapitalization30Jun2026.xlsx",
+# the long "...oflistedcompaniesduringthesixmonthsended31Dec2022.xlsx", and the Strapi-era
+# "Average_Market_Capitalization_30_Jun2024_<hash>.xlsx" — so allow separators between the
+# words. Missing one file is not cosmetic: it leaves a 12-month hole in which portfolios
+# get classified against a stale list.
+# The trailing \s* is load-bearing: at least one href on the page is written with a space
+# before the closing quote ("...Jun2024_2a1ab4c1d8.xlsx "), and requiring .xlsx" dropped
+# that entire half-year.
+_CAP_FILE_RE = re.compile(
+    r'href="([^"]*Average[_\s-]*Market[_\s-]*Capitali[sz]ation[^"]*\.xlsx)\s*"', re.IGNORECASE
+)
+
+# "...ended 30 June 2026" / "...ended31Dec2025.xlsx" / "..._30_Jun2024_<hash>.xlsx" — the
+# effective date lives in both the title row and the filename; the filename is the more
+# reliable of the two.
+_FILENAME_DATE_RE = re.compile(r"(\d{1,2})[_\s-]*([A-Za-z]{3,9})[_\s-]*(\d{4})")
 
 # AMFI publishes updated lists in Jan and Jul — effective from the 1st of those months.
 # If we can't parse the date from the file itself, we derive it from the current date.
@@ -141,8 +183,96 @@ def _parse_caplist_xlsx(raw: bytes) -> tuple[str, list[tuple[str, str, str]]]:
                         rows.append((c, name, current_cap))
                         break
 
+    if not rows:
+        # No explicit cap labels anywhere — AMFI's current (and archival) format. Classify
+        # by rank instead, which is what SEBI's rule actually specifies.
+        for sheet_name in wb.sheetnames:
+            rows = _parse_ranked_caplist(wb[sheet_name])
+            if rows:
+                break
+
+    if effective_date is None:
+        # The title row carries the period end ("... six months ended 30 June 2026").
+        for sheet_name in wb.sheetnames:
+            for row in wb[sheet_name].iter_rows(min_row=1, max_row=3, values_only=True):
+                for cell in row:
+                    if cell and "ended" in str(cell).lower():
+                        effective_date = _effective_date_from_name(str(cell))
+                        break
+                if effective_date:
+                    break
+            if effective_date:
+                break
+
     wb.close()
     return effective_date or _derive_effective_date(), rows
+
+
+def _cap_for_rank(rank: int) -> str:
+    """SEBI's rank buckets: 1-100 large, 101-250 mid, 251+ small."""
+    if rank <= _LARGE_CAP_MAX_RANK:
+        return "large"
+    if rank <= _MID_CAP_MAX_RANK:
+        return "mid"
+    return "small"
+
+
+def _parse_ranked_caplist(ws) -> list[tuple[str, str, str]]:
+    """Parse AMFI's ranked layout: one company per row, descending by average market cap.
+
+    Rank comes from row order, not the "Sr. No." column — that column is blank or repeated
+    in some vintages, and a wrong rank silently moves a stock between cap buckets.
+    """
+    entries: list[tuple[str, str, str]] = []
+    for row in ws.iter_rows(values_only=True):
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        isin = next((c for c in cells if _ISIN_RE.match(c)), None)
+        if not isin:
+            continue
+        name = ""
+        for c in cells:
+            if c and c != isin and not _ISIN_RE.match(c) and not c.replace(".", "").isdigit():
+                name = c
+                break
+        entries.append((isin, name, _cap_for_rank(len(entries) + 1)))
+    return entries
+
+
+def _effective_date_from_name(text: str) -> str | None:
+    """Pull the period-end date out of a filename or title row."""
+    m = _FILENAME_DATE_RE.search(text)
+    if not m:
+        return None
+    day, month, year = m.groups()
+    try:
+        from dateutil import parser as dtp
+        return dtp.parse(f"{day} {month} {year}", dayfirst=True).date().isoformat()
+    except Exception:
+        return None
+
+
+def discover_caplist_urls(client: httpx.Client | None = None) -> list[tuple[str, str | None]]:
+    """Scrape the listing page for every published cap-list file.
+
+    Returns [(absolute_url, effective_date_iso_or_None), ...], newest first.
+    """
+    headers = {"User-Agent": config.USER_AGENT}
+    if client is None:
+        with httpx.Client() as c:
+            resp = c.get(CAP_LIST_INDEX_URL, headers=headers, follow_redirects=True, timeout=60)
+    else:
+        resp = client.get(CAP_LIST_INDEX_URL, headers=headers, follow_redirects=True, timeout=60)
+    resp.raise_for_status()
+
+    seen: dict[str, str | None] = {}
+    for href in _CAP_FILE_RE.findall(resp.text):
+        href = href.strip()
+        url = href if href.startswith("http") else "https://www.amfiindia.com" + (
+            href if href.startswith("/") else "/" + href
+        )
+        seen.setdefault(url, _effective_date_from_name(url))
+    # Newest first; undated entries last so a dated file always wins a same-period tie.
+    return sorted(seen.items(), key=lambda kv: (kv[1] is None, kv[1] or ""), reverse=True)
 
 
 def _classify_cap_raw(text: str) -> str | None:
@@ -161,48 +291,36 @@ def _classify_cap_raw(text: str) -> str | None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch_and_store_caplist(conn: sqlite3.Connection) -> dict:
-    """Fetch the current AMFI cap list, store the raw file in the blob store, and upsert
-    the isin_market_cap table.
-
-    Returns stats dict with keys: effective_date, isin_count, skipped, blob_path.
-    Idempotent: if the sha256 of the downloaded file already exists, the blob is not
-    re-stored and the DB is not re-written (detected via the caplist_doc_id in isin_market_cap).
-    """
-    log.info("Fetching AMFI cap list from %s", CAP_LIST_URL)
-    with httpx.Client() as client:
-        resp = client.get(
-            CAP_LIST_URL,
-            headers={"User-Agent": config.USER_AGENT},
-            follow_redirects=True,
-            timeout=60,
-        )
-        resp.raise_for_status()
+def _ingest_one(
+    conn: sqlite3.Connection,
+    url: str,
+    date_hint: str | None,
+    client: httpx.Client | None = None,
+) -> dict:
+    """Fetch, archive and load a single cap-list file. Idempotent on sha256."""
+    headers = {"User-Agent": config.USER_AGENT}
+    if client is None:
+        with httpx.Client() as c:
+            resp = c.get(url, headers=headers, follow_redirects=True, timeout=120)
+    else:
+        resp = client.get(url, headers=headers, follow_redirects=True, timeout=120)
+    resp.raise_for_status()
     raw = resp.content
     sha256 = hashlib.sha256(raw).hexdigest()
 
-    # Check if we already have this exact file
     existing = conn.execute(
         "SELECT doc_id FROM document WHERE sha256 = ?", (sha256,)
     ).fetchone()
     if existing:
-        return {
-            "effective_date": _get_latest_effective_date(conn),
-            "isin_count": 0,
-            "skipped": True,
-            "note": "Cap list unchanged (same sha256); no update needed.",
-            "doc_id": existing["doc_id"],
-        }
+        return {"url": url, "skipped": True, "isin_count": 0, "doc_id": existing["doc_id"]}
 
-    # Store raw bytes
     _, blob_path = blobstore.put(raw)
+    parsed_date, entries = _parse_caplist_xlsx(raw)
+    # The filename date is authoritative: a title row can be copy-pasted from the previous
+    # half-year (AMFI has shipped that), and a wrong effective_date silently misclassifies
+    # every portfolio in the affected window.
+    effective_date = date_hint or parsed_date
 
-    # Parse
-    effective_date, entries = _parse_caplist_xlsx(raw)
-    log.info("Parsed %d ISIN entries, effective %s", len(entries), effective_date)
-
-    # Store document record
-    import uuid
     from datetime import timezone
     doc_id = f"caplist_{effective_date}_{sha256[:8]}"
     now = datetime.now(timezone.utc).isoformat()
@@ -213,29 +331,66 @@ def fetch_and_store_caplist(conn: sqlite3.Connection) -> dict:
            VALUES (?,NULL,NULL,'caplist',?,?,?,
                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                    ?,?,NULL,'parsed',?)""",
-        (doc_id, effective_date, CAP_LIST_URL, sha256, str(blob_path), now,
-         1.0 if entries else 0.0),
+        (doc_id, effective_date, url, sha256, str(blob_path), now, 1.0 if entries else 0.0),
     )
 
-    # Upsert isin_market_cap
-    upserted = 0
-    for isin, _name, cap_label in entries:
-        conn.execute(
-            """INSERT OR REPLACE INTO isin_market_cap
-               (isin, market_cap, effective_date, caplist_doc_id)
-               VALUES (?,?,?,?)""",
-            (isin, cap_label, effective_date, doc_id),
-        )
-        upserted += 1
-
-    conn.commit()
-    log.info("Stored %d cap-list entries for effective_date=%s", upserted, effective_date)
+    conn.executemany(
+        """INSERT OR REPLACE INTO isin_market_cap
+           (isin, market_cap, effective_date, caplist_doc_id) VALUES (?,?,?,?)""",
+        [(isin, cap, effective_date, doc_id) for isin, _name, cap in entries],
+    )
+    log.info("Stored %d cap-list entries for effective_date=%s", len(entries), effective_date)
     return {
-        "effective_date": effective_date,
-        "isin_count": upserted,
+        "url": url,
         "skipped": False,
+        "effective_date": effective_date,
+        "isin_count": len(entries),
         "doc_id": doc_id,
-        "blob_path": blob_path,
+        "blob_path": str(blob_path),
+    }
+
+
+def fetch_and_store_caplist(conn: sqlite3.Connection, latest_only: bool = False) -> dict:
+    """Discover every published AMFI cap list and load the ones we don't already have.
+
+    Loading the full archive rather than only the current file is what makes
+    get_market_cap() point-in-time correct — with a single version, every portfolio
+    predating the first fetch was classified against a list that did not yet exist.
+
+    Idempotent: files are keyed by sha256, so a rerun re-downloads but re-parses and
+    re-writes nothing. Returns aggregate stats; `versions` details each file.
+    """
+    discovered = discover_caplist_urls()
+    if not discovered:
+        raise RuntimeError(
+            f"No cap-list files found at {CAP_LIST_INDEX_URL} — AMFI has likely changed "
+            "the page layout again. The link pattern is in _CAP_FILE_RE."
+        )
+    if latest_only:
+        discovered = discovered[:1]
+
+    versions: list[dict] = []
+    errors: list[dict] = []
+    with httpx.Client() as client:
+        for url, date_hint in discovered:
+            try:
+                versions.append(_ingest_one(conn, url, date_hint, client=client))
+            except Exception as exc:  # noqa: BLE001
+                # One bad half-year must not lose the other eight; the gap is reported.
+                errors.append({"url": url, "error": str(exc)})
+                log.warning("Cap list %s failed: %s", url, exc)
+    conn.commit()
+
+    loaded = [v for v in versions if not v["skipped"]]
+    return {
+        "effective_date": _get_latest_effective_date(conn),
+        "isin_count": sum(v["isin_count"] for v in loaded),
+        "versions_discovered": len(discovered),
+        "versions_loaded": len(loaded),
+        "versions_skipped": len(versions) - len(loaded),
+        "skipped": not loaded and not errors,
+        "versions": versions,
+        "errors": errors,
     }
 
 

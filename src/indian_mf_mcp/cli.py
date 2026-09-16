@@ -111,9 +111,13 @@ def _cmd_setup(args) -> None:
             print("      already current", file=sys.stderr)
         else:
             print(
-                f"      {cap['isin_count']:,} ISINs, effective {cap['effective_date']}",
+                f"      {cap['versions_loaded']} of {cap['versions_discovered']} "
+                f"half-yearly lists loaded, {cap['isin_count']:,} ISINs, "
+                f"latest effective {cap['effective_date']}",
                 file=sys.stderr,
             )
+        for err in cap.get("errors", []):
+            print(f"      warning: {err['url'].split('/')[-1]}: {err['error']}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         # A cap-list failure must not abort setup: it degrades exactly one section of one
         # tool, which already reports itself as unavailable.
@@ -527,12 +531,16 @@ def main() -> None:
         json.dump(stats, sys.stdout, indent=2)
         print()
         if stats.get("skipped"):
-            print("Cap list unchanged (same sha256). No update needed.", file=sys.stderr)
+            print("Cap lists unchanged (same sha256). No update needed.", file=sys.stderr)
         else:
             print(
-                f"Stored {stats['isin_count']} ISINs for effective_date={stats['effective_date']}",
+                f"Loaded {stats['versions_loaded']} of {stats['versions_discovered']} "
+                f"half-yearly cap lists ({stats['isin_count']:,} ISIN rows); "
+                f"latest effective_date={stats['effective_date']}",
                 file=sys.stderr,
             )
+        for err in stats.get("errors", []):
+            print(f"warning: {err['url']}: {err['error']}", file=sys.stderr)
 
     elif args.command == "ingest-addendum":
         from indian_mf_mcp.ingest.addendum_ingest import ingest_addendum_from_url
