@@ -22,7 +22,9 @@ import xlrd
 
 from indian_mf_mcp.ingest.amc_adapters.base import normalize_scheme_name
 from indian_mf_mcp.parsers.sniff import FormatKind, sniff
-from indian_mf_mcp.parsers.xlsx_portfolio import xls_sheet_to_rows
+from indian_mf_mcp.parsers.xlsx_portfolio import (
+    parse_portfolio_xls, parse_portfolio_xlsx, xls_sheet_to_rows,
+)
 
 # A sheet code is short and has no spaces (e.g. "ME", "YO08", "144D"); a scheme name is a
 # much longer free-text string. Used only when no header row can be found at all.
@@ -145,3 +147,44 @@ def find_sheet_by_title(raw: bytes, scheme_hint: str, exclude_sheet_names: tuple
             best = sheet_name
     return best
 
+
+# How far down a sheet to look for the scheme's name in its title block.
+_TITLE_SCAN_ROWS = 8
+
+
+def find_sole_holdings_sheet(raw: bytes, scheme_hint: str) -> str | None:
+    """For ONE-FILE-PER-SCHEME AMCs whose file nonetheless has extra sheets: HDFC adds a
+    "Derivative<code>" disclosure sheet, Taurus a "<code> Performance" table, HSBC "Notes" and
+    "Disclaimer", Invesco a top-10 summary, DSP an empty "Sheet1", ICICI a "Derivative" sheet.
+    Returns the holdings sheet only when that is provable rather than a guess:
+
+      1. exactly ONE sheet parses to holdings with at least one ISIN — every other sheet
+         yields none; and
+      2. that sheet's own title block names this scheme (normalised match).
+
+    Anything else — two candidate sheets (a genuine combined workbook), zero, or a title that
+    doesn't name the scheme — returns None, and the caller keeps treating the file as
+    ambiguous. Parsing every sheet is deliberate: "the first sheet" or "the biggest sheet"
+    would be exactly the guess portfolio_ingest's ambiguity gate exists to prevent."""
+    fmt = sniff(raw)
+    parse_fn = {FormatKind.XLSX: parse_portfolio_xlsx,
+                FormatKind.XLS_BIFF: parse_portfolio_xls}.get(fmt)
+    opened = _open_workbook(raw)
+    if parse_fn is None or opened is None:
+        return None
+    sheet_names, rows_for = opened
+
+    candidates = [name for name in sheet_names
+                  if any(h.isin for h in parse_fn(raw, sheet_name=name).holdings)]
+    if len(candidates) != 1:
+        return None
+    sheet = candidates[0]
+
+    target = normalize_scheme_name(scheme_hint)
+    if not target:
+        return None
+    for row in rows_for(sheet, limit=_TITLE_SCAN_ROWS):
+        for c in row:
+            if isinstance(c, str) and target in normalize_scheme_name(c):
+                return sheet
+    return None

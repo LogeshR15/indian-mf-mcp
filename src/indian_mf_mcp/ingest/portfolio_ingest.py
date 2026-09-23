@@ -9,6 +9,7 @@ from typing import Callable
 
 import sqlite3
 
+from indian_mf_mcp.ingest.amc_adapters import combined_workbook
 from indian_mf_mcp.ingest.amc_adapters.base import AMCAdapter, DocType, DocumentRef
 from indian_mf_mcp.parsers.sniff import FormatKind, sniff
 from indian_mf_mcp.parsers.xlsx_portfolio import parse_portfolio_xls, parse_portfolio_xlsx
@@ -80,6 +81,14 @@ def ingest_scheme_portfolios(
         # scheme's holdings to this scheme_id. Flag it rather than guess: the raw bytes are
         # still archived below, but no snapshot is persisted from an unverified sheet pick.
         ambiguous_multi_sheet = sheet_resolver is None and result.sheet_count > 1
+        if ambiguous_multi_sheet:
+            # ...unless exactly one sheet holds an ISIN-level holdings table AND that sheet's
+            # own title names this scheme (HDFC/Taurus/HSBC/Invesco/DSP/ICICI files carry a
+            # derivatives, performance, notes or empty sheet next to the holdings sheet).
+            sole = combined_workbook.find_sole_holdings_sheet(raw, scheme_hint)
+            if sole is not None:
+                result = parse_fn(raw, sheet_name=sole)
+                ambiguous_multi_sheet = False
 
         conn.execute(
             """INSERT INTO document (doc_id, scheme_id, doc_type, doc_date, source_url, sha256,
