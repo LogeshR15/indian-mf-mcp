@@ -40,3 +40,16 @@ def test_holdings_extracted_correctly():
     mm = next(h for h in r.holdings if "Mahindra & Mahindra" in h.instrument_name)
     assert mm.isin == "INE101A01026"
     assert mm.asset_class == "equity"
+
+
+def test_flexi_cap_holdings_sum_to_nav_without_subtotal_row():
+    """Nippon's Flexi Cap sheet code is the legacy "LC". Its "Subtotal" (one word) row was
+    loaded as a holding worth ~99% of NAV, and "Cash Margin - Derivatives" was dropped."""
+    raw = FIXTURE.read_bytes()
+    sheet = find_sheet_code(raw, "Nippon India Flexi Cap Fund")
+    assert sheet == "LC"
+    r = parse_portfolio_xlsx(raw, sheet_name=sheet)
+    names = [h.instrument_name for h in r.holdings]
+    assert "Subtotal" not in names
+    assert r.reconciliation_ok is True
+    assert abs(sum(h.pct_nav or 0 for h in r.holdings) - 1.0) < 0.005

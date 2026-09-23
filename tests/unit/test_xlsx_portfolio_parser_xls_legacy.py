@@ -41,10 +41,10 @@ def _standard_rows() -> list[list]:
         _HEADER,
         ["Equity & Equity Related", None, None, None, None, None],
         ["(a) Listed / awaiting listing on Stock Exchange", None, None, None, None, None],
-        ["HDFC Bank Limited", "INE040A01034", "Banks", 1000, 1500.0, 0.075],
-        ["Infosys Limited", "INE009A01021", "IT - Software", 800, 1200.0, 0.06],
+        ["HDFC Bank Limited", "INE040A01034", "Banks", 1000, 1500.0, 0.5],
+        ["Infosys Limited", "INE009A01021", "IT - Software", 800, 1200.0, 0.4],
         ["Money Market Instruments", None, None, None, None, None],
-        ["TREPS", None, None, None, 300.0, 0.015],
+        ["TREPS", None, None, None, 300.0, 0.1],
         ["Grand Total", None, None, None, 3000.0, 1.0],
     ]
 
@@ -64,7 +64,7 @@ def test_holdings_extracted_with_isin_and_asset_class():
     hdfc = next(h for h in r.holdings if h.instrument_name == "HDFC Bank Limited")
     assert hdfc.isin == "INE040A01034"
     assert hdfc.asset_class == "equity"
-    assert hdfc.pct_nav == pytest.approx(0.075)
+    assert hdfc.pct_nav == pytest.approx(0.5)
 
 
 def test_reconciliation_fails_when_grand_total_off():

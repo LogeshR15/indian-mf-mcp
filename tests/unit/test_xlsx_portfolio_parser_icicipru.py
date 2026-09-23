@@ -31,3 +31,12 @@ def test_holdings_extracted():
     assert icici_bank.isin == "INE090A01021"
     assert icici_bank.asset_class == "equity"
     assert abs(icici_bank.pct_nav - 0.0940254757637) < 1e-6
+
+
+def test_subtotal_carrying_section_headers_are_not_holdings():
+    """ICICI prints each section's subtotal on its header row; counting those doubled NAV."""
+    r = parse_portfolio_xlsx(FIXTURE.read_bytes())
+    names = [h.instrument_name for h in r.holdings]
+    assert "Listed / Awaiting Listing On Stock Exchanges" not in names
+    assert "Treasury Bills" not in names
+    assert abs(sum(h.pct_nav or 0 for h in r.holdings) - 1.0) < 0.005

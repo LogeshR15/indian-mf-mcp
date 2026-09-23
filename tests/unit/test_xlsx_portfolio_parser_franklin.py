@@ -53,3 +53,10 @@ def test_section_header_rows_not_captured_as_bogus_holdings():
     names = [h.instrument_name for h in r.holdings]
     assert "Debt Instruments" not in names
     assert not any("Listed / awaiting listing" in n for n in names)
+
+
+def test_swap_notional_table_after_grand_total_is_not_holdings():
+    raw = FIXTURE.read_bytes()
+    r = parse_portfolio_xlsx(raw, sheet_name="FBPF")
+    assert not any("Pay Fixed" in h.instrument_name for h in r.holdings)
+    assert abs(sum(h.pct_nav or 0 for h in r.holdings) - 1.0) < 0.005

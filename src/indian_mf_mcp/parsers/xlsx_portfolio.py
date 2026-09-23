@@ -111,7 +111,7 @@ def _is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-_TOTAL_WORD_RE = re.compile(r"\btotal\b", re.IGNORECASE)
+_TOTAL_WORD_RE = re.compile(r"\b(?:sub)?total\b", re.IGNORECASE)
 
 
 def _is_aggregate_label(text: str) -> bool:
@@ -121,8 +121,26 @@ def _is_aggregate_label(text: str) -> bool:
     prefix-only or exact-match check silently lets suffix-style totals through as fake
     holdings (they have no ISIN/industry/quantity, only a value+pct, identical in shape to a
     genuine standalone cash line like "NET CURRENT ASSETS" — the label text is the only
-    signal that distinguishes them)."""
+    signal that distinguishes them). Nippon India writes "Subtotal" as one word, which a bare
+    \\btotal\\b never matches — it was loaded as a ~99%-of-NAV fake holding.
+
+    Callers must only apply this to rows WITHOUT an ISIN: "total" is also a word inside real
+    company names ("Adani Total Gas Ltd."), and skipping that row drops a genuine holding."""
     return bool(_TOTAL_WORD_RE.search(text))
+
+
+# Leading "(a) ", "a) ", "A. ", "II. " enumerators on section labels.
+_ENUMERATOR_RE = re.compile(r"^\(?[a-z0-9]{1,4}[).:]\s*")
+
+
+def _nil_to_none(value):
+    """Several AMCs (ICICI Prudential, Mirae) print the literal text "Nil" in the value/%
+    columns of an empty section. That's "no value", not a value — left as a string it
+    defeats the "no data columns populated" section-header test and the empty section is
+    stored as a fake zero-weight holding."""
+    if isinstance(value, str) and value.strip().lower() in ("nil", ""):
+        return None
+    return value
 
 
 def _asset_class_for(top_section: str, sub_section: str) -> str:
@@ -153,6 +171,9 @@ class ColumnMap:
     quantity: int
     value: int
     pct: int
+    # Set only when the file has a SEPARATE rating column alongside industry (quant: "RATING"
+    # then "INDUSTRY"); a combined "Industry/Rating" column is just `industry`.
+    rating: int | None = None
 
 
 def _find_main_header_row(rows: list[tuple]) -> tuple[int, ColumnMap] | None:
@@ -179,7 +200,16 @@ def _find_main_header_row(rows: list[tuple]) -> tuple[int, ColumnMap] | None:
                         "percentage of net")
         if name_col is None or isin_col is None or pct_col is None:
             continue
-        industry_col = find("industry", "rating")
+        # Prefer the industry column when a file carries both: quant lists "RATING" (always
+        # "N.A." for equities) BEFORE "INDUSTRY", and a first-match on either word read every
+        # equity's sector as "N.A.". The rating column is kept as a per-row fallback so debt
+        # rows (industry "N.A.", rating "SOV") still get their rating.
+        industry_col = find("industry")
+        rating_col = find("rating")
+        if industry_col is None:
+            industry_col, rating_col = rating_col, None
+        elif rating_col == industry_col:
+            rating_col = None
         qty_col = find("quantity")
         value_col = next(
             (idx for idx, t in enumerate(texts)
@@ -189,7 +219,7 @@ def _find_main_header_row(rows: list[tuple]) -> tuple[int, ColumnMap] | None:
         if industry_col is None or qty_col is None or value_col is None:
             continue
         return i, ColumnMap(name=name_col, isin=isin_col, industry=industry_col,
-                             quantity=qty_col, value=value_col, pct=pct_col)
+                             quantity=qty_col, value=value_col, pct=pct_col, rating=rating_col)
     return None
 
 
@@ -315,6 +345,36 @@ def xls_sheet_to_rows(ws) -> list[tuple]:
     return rows
 
 
+def _drop_subtotal_headers(result: PortfolioParseResult, standalone_idx: list[int]) -> None:
+    """ICICI Prudential prints a section's subtotal on the section header row itself
+    ("Treasury Bills ... 12697.96  0.0049", then the individual T-bills). That row has the same
+    shape as a genuine standalone line (TREPS, NET CURRENT ASSETS — value + %, no ISIN), so it
+    can't be told apart when it is read. It can afterwards: a header is followed by rows (at
+    least one with an ISIN) that add up exactly to its own %, a standalone line is not.
+    Anything that doesn't prove itself a header this way stays a holding."""
+    drop = set()
+    bounds = standalone_idx[1:] + [len(result.holdings)]
+    for i, end in zip(standalone_idx, bounds):
+        header = result.holdings[i]
+        if header.pct_nav is None:
+            continue
+        # Children run to the next standalone line, not the next ISIN-less row: ICICI puts
+        # hedge legs ("Maruti Suzuki India Ltd. $$", no ISIN, negative %) inside the block,
+        # and the header's subtotal includes them.
+        children = result.holdings[i + 1:end]
+        if not any(h.isin for h in children):
+            continue
+        child_sum = sum(h.pct_nav or 0.0 for h in children)
+        if abs(child_sum - header.pct_nav) <= max(1e-6, 1e-4 * abs(header.pct_nav)):
+            drop.add(i)
+            for h in children:
+                h.section_label = header.instrument_name
+                name_l = header.instrument_name.lower()
+                h.listed = "listed" in name_l and "unlisted" not in name_l
+    if drop:
+        result.holdings = [h for i, h in enumerate(result.holdings) if i not in drop]
+
+
 def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
     """Shared row-walking core for parse_portfolio_xlsx and parse_portfolio_xls — everything
     from here down operates on a plain list[tuple] and has no idea which spreadsheet library
@@ -341,6 +401,15 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
     sub_section = ""
     in_derivatives_body = False
     deriv_header_seen = False
+    # Indices into result.holdings of valued rows with no ISIN/industry/quantity — either a
+    # genuine standalone line (NET CURRENT ASSETS, TREPS) or a section header that carries its
+    # own subtotal (see _drop_subtotal_headers). Resolved after the walk.
+    standalone_idx: list[int] = []
+    # The GRAND TOTAL row closes the holdings table. What follows can still be a derivatives
+    # exposure table (PPFAS), but never more holdings: Franklin prints an interest-rate-swap
+    # notional table and the NAV-per-plan block there, which were being loaded as ~16% of
+    # phantom NAV.
+    past_grand_total = False
 
     def cell(row, idx):
         return row[idx] if idx is not None and len(row) > idx else None
@@ -350,8 +419,8 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
         col_c_raw = cell(row, cols.isin)
         col_d = cell(row, cols.industry)
         col_e = cell(row, cols.quantity)
-        col_f = cell(row, cols.value)
-        col_g = cell(row, cols.pct)
+        col_f = _nil_to_none(cell(row, cols.value))
+        col_g = _nil_to_none(cell(row, cols.pct))
 
         # Some AMCs (Franklin Templeton) put ISIN *before* the name column, and for
         # section/total/summary rows the label text sits in that leading ISIN-column
@@ -382,6 +451,7 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
                              for t in _EXPLICIT_GRAND_TOTAL_LABELS)):
             result.grand_total_market_value = _num(col_f)
             result.grand_total_pct_nav = _num(col_g)
+            past_grand_total = True
             continue
 
         if label and label.strip().lower() == "nil":
@@ -391,7 +461,7 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
         # sub-total/aggregate, not a holding: skip it. Some AMCs (UTI, Tata) never print an
         # explicit "GRAND TOTAL" %-figure at all; the fallback below self-sums the real
         # holdings instead of trying to guess which aggregate row is the true fund-level one.
-        if label and _is_aggregate_label(label):
+        if label and _is_blank(col_c) and _is_aggregate_label(label):
             continue
 
         if label and label.strip().lower() == "derivatives":
@@ -400,18 +470,48 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
             sub_section = ""
             continue
 
+        no_identity_data = _is_blank(col_c) and _is_blank(col_d) and _is_blank(col_e)
+        looks_like_top_level = bool(label) and any(
+            kw in label.strip().lower() for kw in TOP_LEVEL_SECTION_KEYWORDS
+        )
+        # A row carrying its own value is only a top-level header if it actually STARTS with
+        # the section name (ICICI's "Money Market Instruments  12697.96  0.0049"). Anywhere-
+        # in-label matching turned Nippon's valued "Cash Margin - Derivatives" line (0.5% of
+        # NAV) into a "derivatives" section header and dropped it.
+        if looks_like_top_level and (_num(col_f) is not None or _num(col_g) is not None):
+            bare = _ENUMERATOR_RE.sub("", label.strip().lower())
+            looks_like_top_level = any(bare.startswith(kw) for kw in TOP_LEVEL_SECTION_KEYWORDS)
+
+        # A DERIVATIVES block is not always the last section of the holdings table: quant,
+        # Baroda BNP Paribas and Bajaj Finserv follow it with DEBT / MONEY MARKET / OTHERS
+        # (T-bills, TREPS, net current assets). Staying in derivatives mode swallowed those
+        # rows as derivatives, dropping up to ~29% of NAV from holdings.
+        if in_derivatives_body and looks_like_top_level and no_identity_data:
+            in_derivatives_body = False
+
         if in_derivatives_body:
-            deriv_direction = cell(row, deriv_direction_col)
-            deriv_qty = cell(row, deriv_qty_col)
-            deriv_value = cell(row, deriv_value_col)
-            deriv_pct = cell(row, deriv_pct_col)
+            # Two derivative layouts exist. PPFAS/SBI print a separate sub-table with its own
+            # "Long/Short" header, one column left of the main table. quant prints futures
+            # as ordinary rows of the main table (contract symbol in the ISIN column, % to NAV
+            # in the main % column; Baroda BNP Paribas the same with a blank ISIN) with no
+            # sub-header — read with the offset layout, quantity landed in market value and
+            # market value in % (334% of AUM).
+            main_layout = (not deriv_header_seen and _num(col_f) is not None
+                           and _num(col_g) is not None)
+            if main_layout:
+                deriv_direction, deriv_qty, deriv_value, deriv_pct = None, col_e, col_f, col_g
+            else:
+                deriv_direction = cell(row, deriv_direction_col)
+                deriv_qty = cell(row, deriv_qty_col)
+                deriv_value = cell(row, deriv_value_col)
+                deriv_pct = cell(row, deriv_pct_col)
             if label and not deriv_header_seen and deriv_direction and \
                     "long" in str(deriv_direction).strip().lower():
                 deriv_header_seen = True
                 continue
-            if label and _is_aggregate_label(label):
+            if label and not main_layout and _is_aggregate_label(label):
                 continue
-            if label and deriv_direction is None and deriv_value is None:
+            if label and not main_layout and deriv_direction is None and deriv_value is None:
                 # sub-section header within derivatives, e.g. "Index / Stock Futures"
                 sub_section = label
                 continue
@@ -429,10 +529,6 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
         # data columns are populated — some AMCs (e.g. UTI's "NET CURRENT ASSETS") report a
         # standalone cash/other line with a real value+pct but no ISIN/industry/quantity;
         # treating that as a header would silently drop it from holdings and reconciliation.
-        no_identity_data = _is_blank(col_c) and _is_blank(col_d) and _is_blank(col_e)
-        looks_like_top_level = bool(label) and any(
-            kw in label.strip().lower() for kw in TOP_LEVEL_SECTION_KEYWORDS
-        )
         # A named top-level section stays a section even when it also carries its own
         # aggregate value/pct on the same row (ICICI Prudential does this). Anything else
         # still needs every data column empty, which is what keeps a standalone valued line
@@ -447,12 +543,18 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
                 sub_section = label
             continue
 
-        if label and _is_aggregate_label(label):
-            continue  # "Sub Total" / "Total" rows are aggregates, not holdings
+        if label and past_grand_total:
+            continue
 
         if label:
             isin = col_c.strip() if isinstance(col_c, str) and col_c.strip() else None
             industry = col_d.strip() if isinstance(col_d, str) else None
+            if cols.rating is not None and (not industry or industry.lower() in ("n.a.", "na", "-")):
+                rating = cell(row, cols.rating)
+                if isinstance(rating, str) and rating.strip():
+                    industry = rating.strip()
+            if no_identity_data:
+                standalone_idx.append(len(result.holdings))
             label_l = label.lower()
             # Cash-equivalent line items are labeled this way across AMCs regardless of
             # whatever top/sub-section they happen to sit under in that file.
@@ -471,6 +573,9 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
                 listed="listed" in sub_section.lower() if sub_section else False,
                 section_label=sub_section or top_section,
             ))
+
+    _drop_subtotal_headers(result, standalone_idx)
+    file_stated_total = result.grand_total_pct_nav is not None
 
     # Some AMCs (e.g. UTI) never print a %-to-NAV figure on their grand-total row at all —
     # only a market value. Fall back to self-summing the extracted holdings' own pct_nav as
@@ -504,6 +609,21 @@ def _parse_rows(rows: list[tuple]) -> PortfolioParseResult:
         # spec §7: sum of "% to Net Assets" must land within ~0.5% of 100 or the snapshot
         # is flagged rather than silently served as reconciled.
         result.reconciliation_ok = abs(result.grand_total_pct_nav - 1.0) <= 0.005
+        # The file's own GRAND TOTAL saying 100% proves nothing about what WE extracted. Also
+        # require the extracted rows to add up to it — otherwise a dropped section (quant:
+        # 71%) or a double-counted subtotal (Nippon: 199%) sails through as "reconciled".
+        # Futures are part of NAV in some layouts (quant) and a separate exposure table in
+        # others (PPFAS), so either holdings alone or holdings + derivatives may match.
+        if result.reconciliation_ok and file_stated_total:
+            held = sum(h.pct_nav for h in result.holdings if h.pct_nav is not None)
+            derived = held + sum(d.pct_to_aum for d in result.derivatives if d.pct_to_aum is not None)
+            target = result.grand_total_pct_nav
+            if abs(held - target) > 0.005 and abs(derived - target) > 0.005:
+                result.reconciliation_ok = False
+                result.warnings.append(
+                    f"extracted rows sum to {held:.4f} of NAV ({derived:.4f} incl. derivatives) "
+                    f"but the file's grand total is {target:.4f}; parse is incomplete or "
+                    f"double-counted")
     else:
         result.reconciliation_ok = None
         result.warnings.append("GRAND TOTAL row not found; cannot verify 100% reconciliation")
