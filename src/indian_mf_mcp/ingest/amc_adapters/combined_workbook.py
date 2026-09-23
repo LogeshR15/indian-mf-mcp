@@ -20,6 +20,7 @@ from typing import Callable
 import openpyxl
 import xlrd
 
+from indian_mf_mcp.ingest.amc_adapters.base import normalize_scheme_name
 from indian_mf_mcp.parsers.sniff import FormatKind, sniff
 from indian_mf_mcp.parsers.xlsx_portfolio import xls_sheet_to_rows
 
@@ -61,7 +62,7 @@ def _open_workbook(raw: bytes) -> tuple[list[str], Callable[..., list[tuple]]] |
 
 
 def _match(rows, header_idx, name_col, code_col, scheme_hint) -> str | None:
-    target = scheme_hint.strip().lower()
+    target = normalize_scheme_name(scheme_hint)
     best = None
     for row in rows[header_idx + 1 :]:
         if len(row) <= max(name_col, code_col):
@@ -69,7 +70,9 @@ def _match(rows, header_idx, name_col, code_col, scheme_hint) -> str | None:
         name, code = row[name_col], row[code_col]
         if not isinstance(name, str) or not code:
             continue
-        name_l = name.strip().lower()
+        name_l = normalize_scheme_name(name)
+        if not name_l:
+            continue
         if name_l == target:
             return str(code)
         if (target in name_l or name_l in target) and best is None:
@@ -121,7 +124,7 @@ def find_sheet_by_title(raw: bytes, scheme_hint: str, exclude_sheet_names: tuple
     if opened is None:
         return None
     sheet_names, rows_for = opened
-    target = scheme_hint.strip().lower()
+    target = normalize_scheme_name(scheme_hint)
     best = None
     for sheet_name in sheet_names:
         if sheet_name in exclude_sheet_names:
@@ -133,9 +136,12 @@ def find_sheet_by_title(raw: bytes, scheme_hint: str, exclude_sheet_names: tuple
         title = next((c for c in row0 if isinstance(c, str) and c.strip()), None)
         if title is None:
             continue
-        title_l = title.strip().lower()
+        title_l = normalize_scheme_name(title)
+        if not title_l:
+            continue
         if title_l == target:
             return sheet_name
         if (target in title_l or title_l in target) and best is None:
             best = sheet_name
     return best
+

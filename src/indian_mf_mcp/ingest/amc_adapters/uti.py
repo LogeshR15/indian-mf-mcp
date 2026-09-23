@@ -16,7 +16,7 @@ from datetime import date
 import httpx
 
 from indian_mf_mcp import config
-from indian_mf_mcp.ingest.amc_adapters.base import DocType, DocumentRef
+from indian_mf_mcp.ingest.amc_adapters.base import DocType, DocumentRef, normalize_scheme_name
 
 SCHEME_LIST_URL = "https://www.utimf.com/api/get_investor_scheme_fund"
 PORTFOLIO_URL = "https://www.utimf.com/api/get-scheme-portfolio-disclosure"
@@ -34,9 +34,12 @@ class UTIAdapter:
         resp = get(SCHEME_LIST_URL, headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.json().get("data", [])
-        target = scheme_hint.strip().lower()
+        # AMFI "UTI - Flexi Cap Fund." vs UTI's own "UTI Flexi Cap Fund": compare normalised.
+        target = normalize_scheme_name(scheme_hint)
         for item in data:
-            name = (item.get("field_fund_name") or "").lower()
+            name = normalize_scheme_name(item.get("field_fund_name") or "")
+            if not name:
+                continue
             if target in name or name in target:
                 return item.get("field_dofa_schcode")
         return None

@@ -74,7 +74,7 @@ from datetime import date
 import httpx
 
 from indian_mf_mcp import config
-from indian_mf_mcp.ingest.amc_adapters.base import DocType, DocumentRef
+from indian_mf_mcp.ingest.amc_adapters.base import DocType, DocumentRef, normalize_scheme_name
 
 BLOB_HOST = "https://www.icicipruamc.com/blob/downloads/Files/Monthly Portfolio Disclosures"
 
@@ -113,13 +113,17 @@ def _month_ends_since(since: date, until: date):
 
 
 def _extract_scheme(zip_bytes: bytes, scheme_hint: str) -> bytes | None:
-    target = scheme_hint.strip().lower()
+    target = normalize_scheme_name(scheme_hint)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         names = [n for n in zf.namelist() if n.lower().endswith(".xlsx")]
         exact = None
         loose = None
         for name in names:
-            base = name.rsplit("/", 1)[-1][:-len(".xlsx")].strip().lower()
+            # ICICI's member names drift month to month ("Flexicap Fund." in Jul 2026, "Flexi
+            # Cap Fund" in Aug 2026), so compare on the normalised key, not raw text.
+            base = normalize_scheme_name(name.rsplit("/", 1)[-1][:-len(".xlsx")])
+            if not base:
+                continue
             if base == target:
                 exact = name
                 break
