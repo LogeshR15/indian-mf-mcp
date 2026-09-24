@@ -13,7 +13,7 @@ from indian_mf_mcp.analytics import drawdown as dd
 from indian_mf_mcp.analytics import returns as R
 from indian_mf_mcp.analytics import risk as risk_mod
 from indian_mf_mcp.analytics.benchmark import (
-    resolve_benchmark_proxy, benchmark_cagr, benchmark_daily_returns,
+    resolve_benchmark_proxy, benchmark_cagr, aligned_daily_returns,
 )
 from indian_mf_mcp.normalize.taxonomy import is_segregated_portfolio_name
 from indian_mf_mcp.provenance.wrapper import ProvenanceBuilder
@@ -79,6 +79,22 @@ def _pick_plan(conn: sqlite3.Connection, scheme_id: str, plan: str) -> tuple[sql
     return plans[0], fallback_warning + f"used {plans[0]['plan_type']}/{plans[0]['option_type']} instead."
 
 
+def _parse_period(period: str) -> tuple[float | None, str | None]:
+    """"10Y" -> (10.0, None); "since_inception"/"max" -> (None, None); junk -> (10.0, warning)."""
+    p = (period or "").strip().lower()
+    if p in ("since_inception", "si", "max", "all"):
+        return None, None
+    if p.endswith("y"):
+        try:
+            years = float(p[:-1])
+            if years > 0:
+                return years, None
+        except ValueError:
+            pass
+    return 10.0, (f"Unrecognised period={period!r}; expected e.g. '1Y', '5Y', '10Y' or "
+                  "'since_inception'. Falling back to 10Y.")
+
+
 def _series_for_plan(conn: sqlite3.Connection, plan_id: str) -> R.NavSeries:
     rows = repo.get_nav_series(conn, plan_id)
     return R.from_rows(rows)
@@ -90,6 +106,7 @@ def _category_stats(
     category: str,
     years: float,
     as_of: date,
+    sub_category: str | None = None,
 ) -> dict:
     """Category comparator computed from the full ingested universe (spec §3.4 option 3).
 
@@ -104,13 +121,18 @@ def _category_stats(
     a fund manager's ordinary performance, so averaging it into a category median would
     silently distort the comparator for every other fund in that category.
     """
-    rows = conn.execute(
-        """SELECT p.plan_id, p.scheme_id, s.name FROM plan p
+    # Peers are the SEBI sub-category (Flexi Cap, Mid Cap, Liquid...), not the top-level
+    # "Equity Scheme"/"Debt Scheme" bucket — ranking a flexi-cap fund against sectoral,
+    # small-cap and ELSS funds together says nothing about it.
+    sql = """SELECT p.plan_id, p.scheme_id, s.name FROM plan p
            JOIN scheme s ON s.scheme_id = p.scheme_id
            WHERE s.category = ? AND p.plan_type = 'Direct' AND p.option_type = 'Growth'
-             AND p.active = 1""",
-        (category,),
-    ).fetchall()
+             AND p.active = 1"""
+    params: list = [category]
+    if sub_category:
+        sql += " AND s.sub_category = ?"
+        params.append(sub_category)
+    rows = conn.execute(sql, params).fetchall()
     rows = [r for r in rows if not is_segregated_portfolio_name(r["name"])]
     start = as_of - timedelta(days=int(years * 365.25))
     vals: list[float] = []
@@ -225,33 +247,51 @@ def get_fund_performance(
         if plan_warning:
             pb.warn(plan_warning)
 
-        series = _series_for_plan(conn, chosen_plan["plan_id"])
-        if len(series) < 2:
+        full_series = _series_for_plan(conn, chosen_plan["plan_id"])
+        if len(full_series) < 2:
             results[scheme_id] = {"error": "insufficient_nav_history", "meta": {"scheme_id": scheme_id}}
             continue
-
-        src_nav = pb.add_source(
-            type="amfi_nav_history", plan_id=chosen_plan["plan_id"],
-            coverage_start=series.dates[0].isoformat(), coverage_end=series.dates[-1].isoformat(),
-        )
 
         # Anchor calculations to the latest actually-available NAV date, never to "today" —
         # otherwise a stale/cold-cache fund would silently report None instead of its real
         # most-recent numbers. Staleness itself is surfaced as an explicit warning.
-        effective_as_of = min(as_of, series.dates[-1])
+        effective_as_of = min(as_of, full_series.dates[-1])
         if effective_as_of < as_of:
             pb.warn(f"Latest available NAV is {effective_as_of.isoformat()}, "
                     f"older than today ({as_of.isoformat()}); metrics anchored to that date.")
 
+        # `period` bounds the analysis window: risk, rolling, drawdown, stress,
+        # benchmark-relative metrics and nav_series all use only NAVs inside it, and trailing
+        # CAGR is reported for horizons up to it. Since-inception CAGR always uses full history.
+        period_years, period_warning = _parse_period(period)
+        if period_warning:
+            pb.warn(period_warning)
+        if period_years is None:
+            window_start = None
+            horizons = STANDARD_HORIZONS
+        else:
+            window_start = effective_as_of - timedelta(days=int(period_years * 365.25))
+            horizons = [h for h in STANDARD_HORIZONS if h <= period_years]
+            if full_series.dates[0] > window_start:
+                pb.warn(f"NAV history starts {full_series.dates[0].isoformat()}, short of the "
+                        f"requested {period} window; metrics use the available history.")
+        series = full_series.slice(window_start, effective_as_of)
+
+        src_nav = pb.add_source(
+            type="amfi_nav_history", plan_id=chosen_plan["plan_id"],
+            coverage_start=series.dates[0].isoformat(), coverage_end=series.dates[-1].isoformat(),
+            period=period,
+        )
+
         if "trailing" in metrics:
-            for h in STANDARD_HORIZONS:
+            for h in horizons:
                 start = effective_as_of - timedelta(days=int(h * 365.25))
                 val = R.cagr(series, start, effective_as_of)
                 calc = pb.add_calc(method="cagr_daily_nav", inputs=[src_nav],
                                     params={"plan": plan, "horizon_years": h, "as_of": effective_as_of.isoformat(),
                                             "calendar_rule": CALENDAR_RULE})
                 pb.fact(f"cagr_{h}y", val, calc, "calculated")
-            si_val = R.since_inception_cagr(series)
+            si_val = R.since_inception_cagr(full_series)
             calc = pb.add_calc(method="cagr_since_inception", inputs=[src_nav],
                                 params={"calendar_rule": CALENDAR_RULE})
             pb.fact("cagr_since_inception", si_val, calc, "calculated")
@@ -307,11 +347,13 @@ def get_fund_performance(
         if "category" in comparators:
             taxonomy = repo.latest_taxonomy(conn, scheme_id)
             category = taxonomy["category"] if taxonomy else None
+            sub_category = taxonomy["sub_category"] if taxonomy else None
             if category:
-                cat_stats = _category_stats(conn, scheme_id, category, 5.0, effective_as_of)
+                cat_stats = _category_stats(conn, scheme_id, category, 5.0, effective_as_of,
+                                            sub_category=sub_category)
                 calc = pb.add_calc(
                     method="category_stats_5y",
-                    params={"category": category, "years": 5},
+                    params={"category": category, "sub_category": sub_category, "years": 5},
                     caveat=cat_stats.get("survivorship_bias_caveat", ""),
                 )
                 pb.fact(
@@ -342,6 +384,8 @@ def get_fund_performance(
                     "(add to analytics/benchmark.py BENCHMARK_PROXIES if a suitable index fund "
                     "NAV is available in the local store)."
                 )
+            elif proxy.get("registry_mismatch"):
+                pb.warn(proxy["registry_mismatch"])
             elif proxy.get("series") is None:
                 pb.warn(
                     f"Benchmark proxy '{proxy['label']}' is registered but its NAV is not yet "
@@ -356,16 +400,17 @@ def get_fund_performance(
                     comparator_type="proxy",
                     caveat=proxy["caveat"],
                 )
-                bench_rets = benchmark_daily_returns(proxy)
+                bench_series = proxy["series"].slice(window_start, effective_as_of)
+                fund_rets_aligned, bench_rets = aligned_daily_returns(series, bench_series)
 
                 # Trailing CAGR vs benchmark proxy
                 bench_trailing = {}
-                for h in STANDARD_HORIZONS:
+                for h in horizons:
                     start = effective_as_of - timedelta(days=int(h * 365.25))
                     bval = benchmark_cagr(proxy, start, effective_as_of)
                     bench_trailing[f"{h}Y"] = bval
                 calc = pb.add_calc(method="cagr_benchmark_proxy", inputs=[src_bench],
-                                    params={"horizons_years": STANDARD_HORIZONS,
+                                    params={"horizons_years": horizons,
                                             "calendar_rule": CALENDAR_RULE})
                 pb.fact("benchmark_cagr_trailing", bench_trailing, calc, "approximation",
                         caveat=proxy["caveat"])
@@ -373,14 +418,16 @@ def get_fund_performance(
                 # Risk-adjusted vs benchmark (beta, IR, alpha, up/down capture)
                 if bench_rets and "risk" in metrics:
                     calc_b = pb.add_calc(method="benchmark_relative_risk",
-                                          inputs=[src_nav, src_bench])
-                    pb.fact("beta", risk_mod.beta(daily_rets, bench_rets), calc_b, "approximation",
+                                          inputs=[src_nav, src_bench],
+                                          params={"alignment": "common_nav_dates",
+                                                  "n_common_returns": len(bench_rets)})
+                    pb.fact("beta", risk_mod.beta(fund_rets_aligned, bench_rets), calc_b, "approximation",
                             caveat=proxy["caveat"])
-                    pb.fact("information_ratio", risk_mod.information_ratio(daily_rets, bench_rets),
+                    pb.fact("information_ratio", risk_mod.information_ratio(fund_rets_aligned, bench_rets),
                             calc_b, "approximation", caveat=proxy["caveat"])
-                    pb.fact("alpha", risk_mod.alpha(daily_rets, bench_rets, risk_free_annual), calc_b, "approximation",
+                    pb.fact("alpha", risk_mod.alpha(fund_rets_aligned, bench_rets, risk_free_annual), calc_b, "approximation",
                             caveat=proxy["caveat"])
-                    udc = risk_mod.up_down_capture(daily_rets, bench_rets)
+                    udc = risk_mod.up_down_capture(fund_rets_aligned, bench_rets)
                     pb.fact("up_capture", udc["up_capture"], calc_b, "approximation",
                             caveat=proxy["caveat"])
                     pb.fact("down_capture", udc["down_capture"], calc_b, "approximation",
@@ -392,7 +439,7 @@ def get_fund_performance(
 
         results[scheme_id] = pb.build(provenance=provenance, extra_meta={
             "scheme_id": scheme_id, "plan_id": chosen_plan["plan_id"],
-            "plan_requested": plan, "as_of": as_of.isoformat(),
+            "plan_requested": plan, "period": period, "as_of": as_of.isoformat(),
             "coverage_start": series.dates[0].isoformat(), "coverage_end": series.dates[-1].isoformat(),
         })
 

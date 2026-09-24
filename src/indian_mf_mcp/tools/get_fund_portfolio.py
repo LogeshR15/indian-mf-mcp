@@ -9,6 +9,7 @@ Phase 4 additions:
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import date, timedelta
 
@@ -27,9 +28,21 @@ HISTORY_MONTHS = {"none": 0, "12M": 12, "36M": 36, "60M": 60}
 _STALENESS_THRESHOLD_DAYS = 60
 
 
+# PPFAS (and a few others) print TREPS lines under their internal deal code, e.g.
+# "TRP_010926" = TREPS placed 01-09-26. Keep the code but say what it is.
+_TREPS_CODE_RE = re.compile(r"^TRP_\d{6}$")
+
+
+def _display_name(r) -> str:
+    name = r["instrument_name"]
+    if name and r["asset_class"] == "cash" and _TREPS_CODE_RE.match(name.strip()):
+        return f"TREPS / Reverse Repo ({name.strip()})"
+    return name
+
+
 def _holdings_dicts(rows) -> list[dict]:
     return [{
-        "isin": r["isin"], "instrument_name": r["instrument_name"],
+        "isin": r["isin"], "instrument_name": _display_name(r),
         "industry_or_rating": r["industry_or_rating"], "quantity": r["quantity"],
         "market_value_lakhs": r["market_value_lakhs"], "pct_nav": r["pct_nav"],
         "asset_class": r["asset_class"], "listed": bool(r["listed"]),

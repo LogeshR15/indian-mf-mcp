@@ -6,12 +6,51 @@ minefield (spec §5.2). Everything here is derived from AMFI's own NAVAll.txt, s
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 
 from indian_mf_mcp.store import repository as repo
 
+# Words that carry no identity in a scheme name — dropped before word matching.
+_STOPWORDS = {"fund", "plan", "scheme", "the", "of", "direct", "regular", "growth", "option"}
 
-def _confidence_for(row: sqlite3.Row, query: str) -> float:
+# Former names still in common use -> a query fragment for the current AMFI name. Only add
+# renames verified against NAVAll.txt; the matched name is returned, never the alias.
+_RENAMES = {
+    "sbi bluechip": "sbi large cap",
+    "hdfc mid cap opportunities": "hdfc mid cap",
+}
+
+
+def _normalise(text: str) -> str:
+    t = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    t = re.sub(r"\b(mid|small|large|flexi|multi|micro)cap\b", r"\1 cap", t)
+    return " ".join(t.split())
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in _normalise(text).split() if w not in _STOPWORDS]
+
+
+def _word_match_plans(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
+    """Fallback when the literal substring search finds nothing: every query word must
+    appear as a whole word in the scheme name, after normalising punctuation/hyphens and
+    "Midcap"/"Mid-Cap" spellings. Closest names (fewest extra words) first."""
+    q_words = _words(query)
+    if not q_words:
+        return []
+    anchor = max(q_words, key=len)
+    pool = repo.find_plans_by_query(conn, anchor, limit=5000)
+    scored = []
+    for r in pool:
+        name_words = _words(r["scheme_name"] or "")
+        if all(w in name_words for w in q_words):
+            scored.append((len(set(name_words) - set(q_words)), r))
+    scored.sort(key=lambda t: t[0])
+    return [r for _, r in scored][:limit]
+
+
+def _confidence_for(row: sqlite3.Row, query: str, fuzzy: bool = False) -> float:
     q = query.strip().lower()
     if row["isin"] and row["isin"].lower() == q:
         return 1.0
@@ -22,6 +61,8 @@ def _confidence_for(row: sqlite3.Row, query: str) -> float:
         return 0.95
     if q in name:
         return 0.7
+    if fuzzy:
+        return 0.6
     return 0.5
 
 
@@ -63,7 +104,8 @@ def _availability_for_scheme(conn: sqlite3.Connection, scheme_id: str, plan_ids:
     }
 
 
-def _candidate_for_scheme(conn: sqlite3.Connection, rows: list[sqlite3.Row], query: str) -> dict:
+def _candidate_for_scheme(conn: sqlite3.Connection, rows: list[sqlite3.Row], query: str,
+                          matched_via: str | None = None) -> dict:
     first = rows[0]
     plans = []
     for r in rows:
@@ -87,7 +129,8 @@ def _candidate_for_scheme(conn: sqlite3.Connection, rows: list[sqlite3.Row], que
         "active": bool(first["scheme_active"]),
         "plans": plans,
         "availability": _availability_for_scheme(conn, first["scheme_id"], [r["plan_id"] for r in rows]),
-        "confidence": max(_confidence_for(r, query) for r in rows),
+        "confidence": max(_confidence_for(r, query, fuzzy=matched_via is not None) for r in rows),
+        **({"matched_via": matched_via} if matched_via else {}),
     }
 
 
@@ -95,10 +138,24 @@ def resolve_one(conn: sqlite3.Connection, query: str, limit: int) -> list[dict]:
     if not query or not query.strip():
         return []
     rows = repo.find_plans_by_query(conn, query, limit=limit * 8)
+    matched_via = None
+    if not rows:
+        rows = _word_match_plans(conn, query, limit * 8)
+        matched_via = "word_match" if rows else None
+    if not rows:
+        norm = _normalise(query)
+        for old, new in _RENAMES.items():
+            if old in norm:
+                rows = _word_match_plans(conn, norm.replace(old, new), limit * 8)
+                if rows:
+                    matched_via = f"former_name:{old!r}->{new!r}"
+                    break
     by_scheme: dict[str, list[sqlite3.Row]] = {}
     for r in rows:
         by_scheme.setdefault(r["scheme_id"], []).append(r)
-    candidates = [_candidate_for_scheme(conn, rs, query) for rs in by_scheme.values()]
+    # dicts preserve insertion order, so word-match ranking (closest name first) survives
+    # the stable sort below among equal-confidence candidates.
+    candidates = [_candidate_for_scheme(conn, rs, query, matched_via) for rs in by_scheme.values()]
     candidates.sort(key=lambda c: c["confidence"], reverse=True)
     return candidates[:limit]
 
