@@ -5,6 +5,8 @@ producing confident nonsense).
 """
 from __future__ import annotations
 
+import json
+
 import sqlite3
 from datetime import date
 
@@ -96,6 +98,13 @@ def _benchmark(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
     pb.fact("is_proxy", False, src, "official")
 
 
+_NO_TER_CAVEAT = (
+    "No TER record found. Most factsheets since April 2026 print only the Base Expense Ratio "
+    "(see base_expense_ratio_*) and refer to the AMC website for the TER, so none may exist. "
+    "Run `mf-mcp backfill-factsheets` to populate from factsheets that do print it."
+)
+
+
 def _costs(pb: ProvenanceBuilder, conn, scheme_id: str, plans) -> None:
     direct = next((p for p in plans if p["plan_type"] == "Direct" and p["option_type"] == "Growth"), None)
     regular = next((p for p in plans if p["plan_type"] == "Regular" and p["option_type"] == "Growth"), None)
@@ -113,7 +122,7 @@ def _costs(pb: ProvenanceBuilder, conn, scheme_id: str, plans) -> None:
                     caveat=f"As of {ter_row['as_of_date']}; source: {ter_row['source']}.")
         else:
             pb.fact("ter_direct", None, pb.add_source(type="not_yet_ingested"), "official",
-                    caveat="No TER record found. Run `mf-mcp ingest-factsheet` to populate.")
+                    caveat=_NO_TER_CAVEAT)
     else:
         pb.fact("ter_direct", None, pb.add_source(type="no_direct_growth_plan"), "official",
                 caveat="No Direct/Growth plan found for this scheme.")
@@ -130,10 +139,31 @@ def _costs(pb: ProvenanceBuilder, conn, scheme_id: str, plans) -> None:
                     caveat=f"As of {ter_row['as_of_date']}; source: {ter_row['source']}.")
         else:
             pb.fact("ter_regular", None, pb.add_source(type="not_yet_ingested"), "official",
-                    caveat="No TER record found. Run `mf-mcp ingest-factsheet` to populate.")
+                    caveat=_NO_TER_CAVEAT)
     else:
         pb.fact("ter_regular", None, pb.add_source(type="no_regular_growth_plan"), "official",
                 caveat="No Regular/Growth plan found for this scheme.")
+
+    # Base Expense Ratio — what factsheets print since April 2026 (SEBI MF Regulations 2026,
+    # reg. 66(7)). A different number from the TER (it excludes brokerage, transaction costs
+    # and the levies on them), so it is reported as its own fact, never as ter_*.
+    ber_row = conn.execute(
+        """SELECT doc_id, doc_date, ter_json FROM factsheet_extract
+           WHERE scheme_id = ? AND ter_json LIKE '%"BER"%'
+           ORDER BY doc_date DESC LIMIT 1""",
+        (scheme_id,),
+    ).fetchone()
+    if ber_row:
+        ber = json.loads(ber_row["ter_json"]).get("BER", {})
+        src = pb.add_source(type="amc_factsheet", scheme_id=scheme_id,
+                            as_of_date=ber_row["doc_date"], doc_id=ber_row["doc_id"])
+        for plan in ("Direct", "Regular"):
+            if plan in ber:
+                pb.fact(f"base_expense_ratio_{plan.lower()}", ber[plan], src, "official",
+                        caveat=f"Base Expense Ratio as printed in the factsheet for "
+                               f"{ber_row['doc_date']} (% p.a.). Excludes brokerage, transaction "
+                               "costs and the statutory levies on them, so it is lower than the "
+                               "Total Expense Ratio (TER).")
 
     # Realised spread — always computable from NAV series (spec §3.8)
     if direct and regular:
@@ -155,9 +185,10 @@ def _managers(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
     Falls back to an honest warning if no factsheets have been ingested yet."""
     assignments = mrep.get_current_managers_for_scheme(conn, scheme_id)
     if not assignments:
-        # Check if we have ANY factsheets in the store for this scheme
+        # Factsheets read for this scheme — counted per scheme in factsheet_extract, because a
+        # combined factsheet's single `document` row is filed under only one of its schemes.
         factsheet_count = conn.execute(
-            "SELECT COUNT(*) FROM document WHERE scheme_id = ? AND doc_type = 'FACTSHEET'",
+            "SELECT COUNT(*) FROM factsheet_extract WHERE scheme_id = ?",
             (scheme_id,),
         ).fetchone()[0]
         if factsheet_count == 0:
@@ -169,9 +200,9 @@ def _managers(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
             )
         else:
             pb.warn(
-                f"{factsheet_count} factsheet(s) ingested but no current manager assignments "
-                f"found for {scheme_id}. Manager extraction may have failed on these documents "
-                "(check parse_confidence); or all assignments have a to_date set."
+                f"{factsheet_count} factsheet(s) read for {scheme_id} but no current manager "
+                "assignments found. The scheme's page(s) may not print managers in a form the "
+                "extractor recognises, or all assignments have a to_date set. Not fabricated."
             )
         pb.fact("managers", [], pb.add_source(type="manager_assignment_table", scheme_id=scheme_id),
                 "observed")
@@ -182,7 +213,7 @@ def _managers(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
     src = pb.add_source(
         type="factsheet_derived_manager_assignments", scheme_id=scheme_id,
         n_factsheets=conn.execute(
-            "SELECT COUNT(*) FROM document WHERE scheme_id = ? AND doc_type = 'FACTSHEET'",
+            "SELECT COUNT(*) FROM factsheet_extract WHERE scheme_id = ?",
             (scheme_id,),
         ).fetchone()[0],
     )
@@ -197,9 +228,12 @@ def _managers(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:
         }
         for r in all_assignments
     ], src, "observed",
-    caveat="Derived by extracting manager names from ingested factsheets and diffing across "
-           "months. 'managing_since' is the earliest factsheet date where the manager appears. "
-           "Confidence='official' only for addendum-sourced changes; 'observed' otherwise.")
+    caveat="Read from the scheme's own page(s) in monthly factsheets and diffed month to month. "
+           "'managing_since' is the start date the factsheet prints (month precision where it "
+           "prints only a month; 'since inception' resolved to the printed inception date); "
+           "where no start is printed it is the first factsheet the manager was seen in (the "
+           "assignment's notes say so). Confidence='official' only for addendum-sourced "
+           "changes; 'observed' otherwise.")
 
 
 def _documents(pb: ProvenanceBuilder, conn, scheme_id: str) -> None:

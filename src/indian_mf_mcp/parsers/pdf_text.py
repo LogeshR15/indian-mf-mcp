@@ -67,6 +67,35 @@ def parse_pdf(raw: bytes) -> PdfParseResult:
                            warnings=warnings)
 
 
+def layout_texts(raw: bytes, page_numbers: list[int]) -> dict[int, str]:
+    """Layout-preserving text for selected pages (1-indexed), keyed by page number.
+
+    Factsheets are multi-column. pypdf's default extraction reads column by column, so a label
+    and its value end up far apart ("Regular Plan:\nDirect Plan:" ... later "1.05%* 0.53%*").
+    Layout text keeps each visual line together ("Direct Plan:   0.53%*"), which is what
+    label-then-value figures (expense ratios, turnover) need. pdfplumber is used rather than
+    pypdf's own layout mode because HDFC builds every factsheet page from Form XObject
+    templates, and pypdf's layout mode returns an empty string for all of them (Aug 2026, all
+    144 pages); pdfminer, under pdfplumber, reads into the templates. It is ~0.4 s/page, so it
+    is only computed for the pages a caller asks for, alongside — not instead of — the default
+    text."""
+    import pdfplumber
+
+    out: dict[int, str] = {}
+    try:
+        pdf = pdfplumber.open(io.BytesIO(raw))
+    except Exception:  # noqa: BLE001
+        return out
+    with pdf:
+        for n in page_numbers:
+            if 1 <= n <= len(pdf.pages):
+                try:
+                    out[n] = pdf.pages[n - 1].extract_text(layout=True) or ""
+                except Exception:  # noqa: BLE001
+                    out[n] = ""
+    return out
+
+
 def classify_parse_status(result: PdfParseResult) -> str:
     """Maps a PdfParseResult to a document.parse_status value:
       - 'unparseable'          the PDF failed to open, or opened with zero pages

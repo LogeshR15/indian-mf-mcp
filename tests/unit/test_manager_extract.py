@@ -72,3 +72,9 @@ class TestExtractManagersFromText:
         text = "Fund Manager: xxxxxx 12345"
         results = extract_managers_from_text(text)
         assert results == []
+
+
+def test_co_manager_list_wrapping_after_connector():
+    """Kotak (Aug 2026) wraps the second co-manager onto the next line after '&'."""
+    text = "Fund Manager*: Mr. Deepak Agrawal & \n Mr. Sunil Pandey\nAAUM:  41,044.12 crs"
+    assert {m.name for m in extract_managers_from_text(text)} == {"Deepak Agrawal", "Sunil Pandey"}

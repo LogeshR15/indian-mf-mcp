@@ -88,6 +88,58 @@ standard "one file per scheme" pipeline (`sheet_resolver=None`) applies unchange
 
 Values are already fractional-or-percentage-points depending on scheme (xlsx_portfolio.py's
 existing scale detection handles both transparently, same as every other AMC).
+
+MONTHLY FACTSHEETS (DocType.FACTSHEET) — ground-truthed live 2026-09-23
+---------------------------------------------------------------------
+Factsheets do NOT live on `vatseelabs-s3.kotakmf.com` (no factsheet key was ever found there;
+public search only surfaces SID/KIM PDFs on that host). They live under
+`https://www.kotakmf.com/factsheet/<folder>/`, found via a public web search
+(`kotakmf.com/factsheet "Kotak MF Factsheet" pdf`) that surfaced real URLs such as
+`/factsheet/may_2026/Kotak%20MF%20Factsheet%20May%202026.pdf` and
+`/factsheet/december-2024/Kotak%20MF%20Factsheet%20December%202024.pdf`.
+
+Crucially, although `www.kotakmf.com` is behind Radware (see above), the `/factsheet/...pdf`
+paths are not: they are served by an S3 proxy (response header
+`x-4front-s3-proxy-key: effiles/<folder>/<file>`, `content-type: application/pdf`, AWS ALB
+cookies) and answer this project's honest User-Agent with a clean `200` and the real PDF
+every time. The per-month e-factsheet *HTML index* (`/factsheet/<folder>/`, whose
+`img/pdf.png` link names the PDF) is Radware-gated: the very first request on 2026-09-23 got a
+`200` for `/factsheet/July_2026/`, every later one (any folder) got `302` to
+`validate.perfdrive.com` with `server: rdwr`. So the index is never used; the PDF URL is
+computed and probed instead (Step 2, route 4 of CONTRIBUTING.md).
+
+ONE combined PDF per month covers every scheme (~190 pages, ~20-28 MB, cover page reads
+"(Data as on 31st July 2026) AUGUST 2026 FUND FACT SHEET", page 3 is a scheme→page index), so
+`list_documents` returns the same URL whatever `scheme_hint` is (the caller scopes pages to
+the scheme). Per-scheme one-pager PDFs also exist
+(`/factsheet/<folder>/kotak/Download_pdf/<SCHEME NAME UPPERCASE>.pdf`) but are not used.
+
+URL convention — irregular, hence probing rather than one formula:
+
+    https://www.kotakmf.com/factsheet/<folder>/Kotak MF Factsheet <Month> <YYYY>.pdf
+
+  - `<folder>` is always the DATA month (the month-end the factsheet describes), but its
+    spelling is hand-typed each month: seen live `January_2025`, `august_2025`,
+    `october_2025`, `December-2025`, `feb_2026`, `March2026`, `may_2026`, `July_2026`,
+    `august-2024` / `december-2024` (all of 2024 is `<month>-<yyyy>` lower-case),
+    `February-2022`. The S3 key is case-sensitive, so every spelling must be tried.
+  - The filename month is USUALLY the data month, but not always: the July 2026 data-month
+    PDF is `July_2026/Kotak MF Factsheet August 2026.pdf` (named for its publication month),
+    while `August_2026/Kotak MF Factsheet August 2026.pdf` is August data. Both same-month and
+    next-month filenames are therefore candidates; the folder alone fixes `as_of_date`.
+    Folder-month == data-month was verified against page 1's "Data as on ..." for Feb, May,
+    Jun, Jul and Aug 2026.
+  - `HEAD` is useless here: it returns `200 text/html` for ANY path, existing or not. A
+    missing key only shows up on `GET` (`404`, `application/xml`, S3 NoSuchKey body). The
+    proxy ignores `Range`, so probes stream the GET and close after the first 8 bytes,
+    accepting only a `200` whose body starts with `%PDF` (a Radware `302` is never followed
+    and never counts as a hit).
+
+History reach (probed 2026-09-23): every month Jan 2024 – Aug 2026 resolves EXCEPT July 2024
+and a handful of candidates never matched for most of 2022-2023 (only Jan/Feb 2022 and
+Dec 2023 hit) — those months presumably use a different filename; they are simply absent
+from listings rather than guessed. The factsheet for month M appears in the first ~10 days
+of month M+1 (August 2026's PDF was modified 2026-09-09).
 """
 from __future__ import annotations
 
@@ -112,6 +164,44 @@ def build_url(as_of: date) -> str:
     folder = f"Consolidated-SEBI-Portfolio-as-on-{as_of.strftime('%B')}-{as_of.day},-{as_of.year}"
     filename = f"ConsolidatedSEBIPortfolio{as_of.strftime('%B')}{as_of.year}.xlsx"
     return FILES_HOST + urllib.parse.quote(folder) + "/" + urllib.parse.quote(filename)
+
+
+FACTSHEET_HOST = "https://www.kotakmf.com/factsheet/"
+
+
+def factsheet_candidate_urls(as_of: date) -> list[str]:
+    """Every plausible URL for the combined factsheet describing `as_of`'s month, most
+    likely first (see module docstring: folder spelling and filename month vary)."""
+    import calendar
+    full = calendar.month_name[as_of.month]
+    abbr = calendar.month_abbr[as_of.month]
+    nxt = date(as_of.year + (as_of.month == 12), as_of.month % 12 + 1, 1)
+    y = as_of.year
+    folders: list[str] = []
+    for tok in (full, full.lower(), abbr.lower(), abbr):
+        for sep in ("_", "-", ""):
+            name = f"{tok}{sep}{y}"
+            if name not in folders:
+                folders.append(name)
+    files = [f"Kotak MF Factsheet {full} {y}.pdf",
+             f"Kotak MF Factsheet {calendar.month_name[nxt.month]} {nxt.year}.pdf"]
+    return [FACTSHEET_HOST + urllib.parse.quote(f) + "/" + urllib.parse.quote(fn)
+            for f in folders for fn in files]
+
+
+def _is_pdf(c: httpx.Client, url: str, headers: dict) -> bool:
+    """True iff `url` GETs a 200 whose body starts with %PDF. HEAD can't be used (200 for
+    any path) and Range is ignored, so stream and stop after the first bytes. Redirects
+    (Radware's 302) are not followed and never count."""
+    try:
+        with c.stream("GET", url, headers=headers, follow_redirects=False) as resp:
+            if resp.status_code != 200:
+                return False
+            for chunk in resp.iter_bytes(8):
+                return chunk.startswith(b"%PDF")
+            return False
+    except httpx.HTTPError:
+        return False
 
 
 def _month_end(year: int, month: int) -> date:
@@ -172,10 +262,14 @@ def _extract_scheme_sheet(raw: bytes, sheet_code: str) -> bytes:
 
 class KotakAdapter:
     amc_id = "amc-kotak"
+    # Factsheets: one PDF per month for every scheme.
+    factsheet_scope = "combined"
 
     def list_documents(self, doc_type: DocType, since: date,
                         scheme_hint: str | None = None,
                         client: httpx.Client | None = None) -> list[DocumentRef]:
+        if doc_type == DocType.FACTSHEET:
+            return self._list_factsheets(since, scheme_hint, client)
         if doc_type != DocType.MONTHLY_PORTFOLIO or not scheme_hint:
             # fetch() needs a scheme name to pick and repair the right sheet, even though the
             # URL itself is computable without one.
@@ -202,8 +296,34 @@ class KotakAdapter:
                 c.close()
         return refs
 
+    def _list_factsheets(self, since: date, scheme_hint: str | None,
+                         client: httpx.Client | None) -> list[DocumentRef]:
+        """One combined PDF per month for all schemes: same URL whatever scheme_hint is."""
+        headers = {"User-Agent": config.USER_AGENT}
+        refs: list[DocumentRef] = []
+        owns_client = client is None
+        c = client or httpx.Client(timeout=30)
+        try:
+            for as_of in _month_ends_since(since, date.today()):
+                url = next((u for u in factsheet_candidate_urls(as_of)
+                            if _is_pdf(c, u, headers)), None)
+                if url is not None:
+                    refs.append(DocumentRef(url=url, doc_type=DocType.FACTSHEET,
+                                             as_of_date=as_of, scheme_hint=scheme_hint))
+        finally:
+            if owns_client:
+                c.close()
+        return refs
+
     def fetch(self, ref: DocumentRef, client: httpx.Client | None = None) -> bytes:
         headers = {"User-Agent": config.USER_AGENT}
+        if ref.doc_type == DocType.FACTSHEET:
+            get = client.get if client is not None else httpx.get
+            resp = get(ref.url, headers=headers, follow_redirects=False, timeout=180)
+            resp.raise_for_status()
+            if not resp.content.startswith(b"%PDF"):
+                raise ValueError(f"Kotak factsheet URL did not return a PDF: {ref.url}")
+            return resp.content
         get = client.get if client is not None else httpx.get
         resp = get(ref.url, headers=headers, follow_redirects=True, timeout=90)
         resp.raise_for_status()

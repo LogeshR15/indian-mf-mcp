@@ -205,6 +205,23 @@ CREATE TABLE IF NOT EXISTS ter_history (
 
 CREATE INDEX IF NOT EXISTS idx_ter_plan_date ON ter_history(plan_id, as_of_date);
 
+-- Phase 3: what one month's factsheet said about one scheme. Most AMCs publish one combined
+-- factsheet PDF for every scheme, so a single `document` row is shared by many schemes; this
+-- records, per scheme, which pages were attributed to it and what was read from them. It is
+-- also the baseline that manager/TER change detection diffs against (the previous month for
+-- the same scheme), so a backfill can be re-run or processed out of order without inventing
+-- changes.
+CREATE TABLE IF NOT EXISTS factsheet_extract (
+    scheme_id TEXT REFERENCES scheme(scheme_id),
+    doc_id TEXT REFERENCES document(doc_id),
+    doc_date TEXT NOT NULL,          -- month-end date the factsheet describes
+    pages_json TEXT,                 -- page numbers attributed to this scheme
+    managers_json TEXT,              -- [{"name", "managing_since"}], [] if none found
+    ter_json TEXT,                   -- {"TER": {"Direct": 1.27, ...}, "BER": {...}}; {} if none
+    extracted_at TEXT,
+    PRIMARY KEY (scheme_id, doc_date)
+);
+
 -- Phase 4: AMFI half-yearly stock categorisation (cap list)
 -- Stores every fetched copy keyed by (isin, effective_date) for point-in-time lookups.
 -- Never use a future cap list to reclassify a past portfolio (spec §3.6, §15).

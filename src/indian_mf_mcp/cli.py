@@ -470,41 +470,17 @@ def main() -> None:
     elif args.command == "backfill-factsheets":
         from datetime import date as _date
 
-        from indian_mf_mcp.ingest.amc_adapters.base import DocType
         from indian_mf_mcp.ingest.amc_adapters.registry import get_adapter
-        from indian_mf_mcp.ingest.factsheet_ingest import ingest_factsheet
+        from indian_mf_mcp.ingest.factsheet_ingest import backfill_factsheets
         from indian_mf_mcp.store.db import connect
 
         adapter, _ = get_adapter(args.amc)
         since = _date.fromisoformat(args.since)
-
-        refs = adapter.list_documents(
-            DocType.FACTSHEET, since=since, scheme_hint=args.scheme_hint
-        )
-        print(f"Found {len(refs)} factsheet(s) since {since}.", file=sys.stderr)
-
-        totals = {"ingested": 0, "skipped": 0, "errors": []}
         with connect() as conn:
-            for ref in refs:
-                try:
-                    raw = adapter.fetch(ref)
-                    doc_date = ref.as_of_date.isoformat() if ref.as_of_date else None
-                    stats = ingest_factsheet(conn, raw, ref.url, args.scheme_id, doc_date=doc_date)
-                    totals["ingested"] += 1
-                    print(
-                        f"  {ref.as_of_date or '?'}: managers={stats['managers_found']} "
-                        f"ter={stats['ter_entries']} events={stats['change_events']}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    if stats.get("warnings"):
-                        for w in stats["warnings"]:
-                            print(f"    warning: {w}", file=sys.stderr)
-                except Exception as exc:  # noqa: BLE001
-                    totals["skipped"] += 1
-                    totals["errors"].append({"url": ref.url, "error": str(exc)})
-                    print(f"  FAILED {ref.url}: {exc}", file=sys.stderr)
-
+            totals = backfill_factsheets(
+                conn, adapter, [(args.scheme_id, args.scheme_hint)], since,
+                log=lambda m: print(m, file=sys.stderr, flush=True),
+            )
         json.dump(totals, sys.stdout, indent=2)
         print()
 
@@ -608,7 +584,7 @@ def main() -> None:
         from indian_mf_mcp.ingest.amc_adapters.registry import get_adapter
         from indian_mf_mcp.ingest.amc_scheme_registry import get_schemes_for_amc
         from indian_mf_mcp.ingest.portfolio_ingest import ingest_scheme_portfolios
-        from indian_mf_mcp.ingest.factsheet_ingest import ingest_factsheet
+        from indian_mf_mcp.ingest.factsheet_ingest import backfill_factsheets
         from indian_mf_mcp.ingest.addendum_ingest import ingest_addendum
         from indian_mf_mcp.store.db import connect
 
@@ -640,7 +616,7 @@ def main() -> None:
         totals: dict = {
             "amc": args.amc, "schemes_attempted": len(schemes),
             "portfolio": {"ingested": 0, "errors": []},
-            "factsheet": {"ingested": 0, "skipped": 0, "errors": []},
+            "factsheet": {},
             "addendum": {"ingested": 0, "skipped": 0, "total_events": 0, "errors": []},
         }
 
@@ -662,19 +638,6 @@ def main() -> None:
                         totals["portfolio"]["errors"].append({"scheme_id": scheme_id, "error": str(exc)})
                         print(f"    portfolio ERROR: {exc}", file=sys.stderr)
 
-                if "factsheet" in doc_types:
-                    try:
-                        refs = adapter.list_documents(DocType.FACTSHEET, since=since, scheme_hint=hint)
-                        for ref in refs:
-                            raw = adapter.fetch(ref)
-                            doc_date = ref.as_of_date.isoformat() if ref.as_of_date else None
-                            s = ingest_factsheet(conn, raw, ref.url, scheme_id, doc_date=doc_date)
-                            totals["factsheet"]["ingested"] += 1
-                        print(f"    factsheet: {len(refs)} processed", file=sys.stderr)
-                    except Exception as exc:  # noqa: BLE001
-                        totals["factsheet"]["errors"].append({"scheme_id": scheme_id, "error": str(exc)})
-                        print(f"    factsheet ERROR: {exc}", file=sys.stderr)
-
                 if "addendum" in doc_types:
                     try:
                         refs = adapter.list_documents(DocType.ADDENDUM, since=since, scheme_hint=hint)
@@ -691,6 +654,13 @@ def main() -> None:
                     except Exception as exc:  # noqa: BLE001
                         totals["addendum"]["errors"].append({"scheme_id": scheme_id, "error": str(exc)})
                         print(f"    addendum ERROR: {exc}", file=sys.stderr)
+
+            if "factsheet" in doc_types:
+                fs = backfill_factsheets(
+                    conn, adapter, [(sc["scheme_id"], sc["adapter_hint"]) for sc in schemes],
+                    since, log=lambda m: print(f"    factsheet: {m}", file=sys.stderr, flush=True),
+                )
+                totals["factsheet"] = fs
 
         json.dump(totals, sys.stdout, indent=2)
         print()

@@ -539,7 +539,50 @@ every entry below as a snapshot of one investigation, not a settled fact.
 - **Phase 3 (document intelligence, partial):** PDF section extraction (SEBI-standard headings +
   keyword search) ground-truthed against a real AMFI-hosted SID, `get_document`, and
   `get_fund_profile` (identity, benchmark, verbatim mandate excerpts, realised Direct-vs-Regular
-  cost spread computed from NAV alone). TER capture and fund-manager extraction from factsheets
-  are not yet implemented and are reported as explicitly unavailable, never fabricated.
+  cost spread computed from NAV alone).
 
-Remaining AMC adapters, TER/manager extraction, and change monitoring (Phase 4) are not yet built.
+---
+
+## Monthly factsheets (managers, expense ratios)
+
+Factsheet discovery exists for six AMCs. All six publish **one combined PDF per month** for
+every scheme (SBI publishes two: active schemes and passives), so `backfill` fetches and
+parses each month once and attributes pages to each scheme (`factsheet_scope = "combined"`).
+Each adapter's module docstring has the full ground-truthing; the short version:
+
+| AMC | Where | History reachable | Quirk that matters |
+|---|---|---|---|
+| PPFAS | server-rendered listing, `amc.ppfas.com/downloads/factsheet/` | Jun 2013 → now, complete | filename convention drifted 9 times; keyed on month+year in the name |
+| HDFC | `files.hdfcfund.com` (S3; `www` is Akamai-403 to the honest UA) | 2019 → now, minus Dec 2023, Mar 2020, Jan 2019 | no listing; computed URL probed with ranged GETs; filed in the *next* month's folder |
+| SBI | `POST www.sbimf.com/ajaxcall/CMS/GetFactSheets` (request shape read from a served JS asset) | Apr 2011 → now (monthly from 2016) | two books per month (all schemes / passives) |
+| ICICI Prudential | public Azure blob host, computed URL + HEAD probe | Jan 2001 → now, few gaps | six filename patterns across eras; April 2026 filed in the previous FY folder; ~2 min to parse one 12 MB PDF |
+| Nippon India | server-rendered downloads page | Oct 2012 → now, complete | **named for the month published** — "August 2026" holds 31 Jul data; `as_of_date` is shifted back a month |
+| Kotak | `www.kotakmf.com/factsheet/<folder>/…pdf` (S3 proxy; the HTML index pages are Radware-gated, the PDFs are not) | Jan 2024 → now (minus Jul 2024); most of 2022–23 not found | folder spelling is hand-typed and case-sensitive; up to 24 candidate URLs probed per month |
+
+**Extraction** (shared, `factsheet_ingest.py` / `manager_extract.py`) was built against these six
+real August 2026 factsheets, which are the golden fixtures in `tests/fixtures/factsheets/`:
+
+- **Page attribution.** A combined factsheet names a scheme on many pages (HDFC: 11 for Flexi
+  Cap), and only one or two are its own. A page counts only if a line *is* the scheme's name
+  and a scheme-page caption ("Type of Scheme", "Details as on", "Category of Scheme",
+  "Erstwhile known as", "An open-ended …") sits within three lines. No match, no extraction.
+- **Base Expense Ratio vs TER.** Since April 2026 (SEBI MF Regulations 2026, reg. 66(7))
+  factsheets print the **Base Expense Ratio**, which excludes brokerage, transaction costs and
+  their levies; five of the six AMCs print only BER and send readers to their website for the
+  TER. SBI prints both side by side. Each figure is typed from its heading, a caption below it,
+  or the footnote its heading points to, and **only TER is written to `ter_history`** — BER is
+  reported by `get_fund_profile` as `base_expense_ratio_*`.
+- **Layout text** comes from pdfplumber, not pypdf's layout mode: HDFC builds every page from
+  Form XObject templates and pypdf's layout mode returns an empty string for all of them.
+- **Change detection** diffs each month against the same scheme's previous month
+  (`factsheet_extract`), so the first factsheet ever ingested is a baseline, an empty read is
+  never treated as every manager resigning, and a month processed out of order is recorded
+  without rewinding current state.
+
+Known gaps: managing-since dates printed only on a separate fund-manager page (Kotak) are left
+unknown rather than guessed; the TER itself is not captured where the factsheet only links to
+it (PPFAS, HDFC, ICICI, Kotak), nor from Nippon's TER annexure table (e.g. "Nippon India Flexi
+Cap Fund 31-Jul-26 1.85 0.67"), which is not parsed yet; exit load and portfolio turnover are not
+yet extracted; and factsheets are discovered for these six AMCs only.
+
+Remaining AMC adapters and change monitoring (Phase 4) are not yet built.

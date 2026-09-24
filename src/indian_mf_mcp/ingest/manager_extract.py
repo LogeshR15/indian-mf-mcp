@@ -31,7 +31,7 @@ from dataclasses import dataclass
 # Spaces between tokens are restricted to horizontal spaces ([ \t]) only so the
 # match never bleeds across line boundaries (which \s would allow).
 _FM_LABEL_RE = re.compile(
-    r"(?:Fund[ \t]+Manager[s]?|Managed[ \t]+by)[ \t]*[:\-][ \t]*"
+    r"(?:Fund[ \t]+Manager[s]?|Managed[ \t]+by)[*¥^#]*[ \t]*[:\-][ \t]*"
     r"((?:[A-Z][a-z]+\.?[ \t]+){1,4}[A-Z][a-z]+)",
 )
 
@@ -46,7 +46,8 @@ _SINCE_RE = re.compile(
 )
 
 # Co-manager separators
-_COSEP_RE = re.compile(r"\s*(?:&|and|,|\|)\s*", re.IGNORECASE)
+# "and" only as a whole word: inside a name it is just letters ("Pandey", "Nandita", "Anand").
+_COSEP_RE = re.compile(r"\s*(?:&|\band\b|,|\|)\s*", re.IGNORECASE)
 
 # "Mr./Ms./Mrs." title prefix
 _TITLE_RE = re.compile(r"^(?:Mr\.|Ms\.|Mrs\.|Dr\.)\s*", re.IGNORECASE)
@@ -54,6 +55,126 @@ _TITLE_RE = re.compile(r"^(?:Mr\.|Ms\.|Mrs\.|Dr\.)\s*", re.IGNORECASE)
 # Name-like: 2–5 capitalised word tokens (handles "Rajeev Thakkar", "Raunak Onkar",
 # "Charanjit Singh Wadehra") — conservative: at least first + last, each word capitalised.
 _NAME_RE = re.compile(r"^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})$")
+
+
+# Sentinel for "Managing Since: Since Inception" — resolved by the caller to the scheme's
+# inception date when the factsheet prints it, else left unknown (never today's date).
+SINCE_INCEPTION = "since_inception"
+
+# A titled manager entry followed by its own "Managing Since" line — the layout real combined
+# factsheets use (PPFAS, Aug 2026):
+#   "Mr. Rajeev Thakkar: Chief Investment Officer - Equity\nand Director\n
+#    Total Experience: 32 Years\nManaging Since: Since Inception"
+# The "Managing Since" clause must follow before the next titled name: that pairing is what
+# separates a manager entry from any other "Mr. X" on the page (trustees, disclaimers).
+_TITLED_NAME_RE = re.compile(
+    r"\b(?:Mr|Ms|Mrs|Dr)\.?[ \t]+((?:[A-Z][A-Za-z'\-]+\.?[ \t]+){0,3}[A-Z][A-Za-z'\-]+)"
+)
+_MANAGING_SINCE_CLAUSE_RE = re.compile(
+    r"(?:managing\s+since|\(\s*since|w\.e\.f\.?)\s*[:\-]?\s*(since\s+inception|inception|"
+    r"\d{1,2}[- ](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[- ,]+\d{2,4}"
+    r"|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}"
+    r"|\d{1,2}/\d{1,2}/\d{2,4})",
+    re.IGNORECASE,
+)
+# How far past a name its "Managing Since" may sit (title + experience lines).
+_ENTRY_SPAN = 300
+
+
+def extract_titled_managers(text: str) -> list[ExtractedManager]:
+    """Managers from "Mr./Ms. <Name>" entries that each carry their own "Managing Since"."""
+    names = list(_TITLED_NAME_RE.finditer(text))
+    out: list[ExtractedManager] = []
+    seen: set[str] = set()
+    for i, m in enumerate(names):
+        stop = names[i + 1].start() if i + 1 < len(names) else len(text)
+        window = text[m.end():min(stop, m.end() + _ENTRY_SPAN)]
+        since = _MANAGING_SINCE_CLAUSE_RE.search(window)
+        if since is None:
+            continue
+        name = _normalise_name(m.group(1))
+        if not _NAME_RE.match(name) or name in seen:
+            continue
+        seen.add(name)
+        raw_since = since.group(1)
+        managing_since = (SINCE_INCEPTION if "inception" in raw_since.lower()
+                          else _parse_since_date(raw_since))
+        out.append(ExtractedManager(name=name, managing_since=managing_since,
+                                    raw_text=text[m.start():m.end() + since.end()][:300],
+                                    confidence="high"))
+    return out
+
+
+_MONTHS_RE = (r"(?:January|February|March|April|May|June|July|August|September|October|"
+              r"November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)")
+_PERSON_RE = r"([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){1,3})"
+
+# Untitled name with its start in parentheses on the same line (Nippon, Jul 2026):
+#   "Meenakshi Dawar (Managing Since Jan 2023)"
+# and ICICI (Aug 2026), on the next line and without the closing parenthesis:
+#   "Rajat Chandak \n(Managing this fund since July, 2021\n& Overall 18 years of experience)"
+_PAREN_SINCE_RE = re.compile(
+    _PERSON_RE + r"\s*\(\s*managing\s+(?:this\s+fund\s+)?since\s+("
+    + _MONTHS_RE + r"\.?,?\s+(?:\d{1,2},?\s*)?\d{4})",
+    re.IGNORECASE,
+)
+
+# A "Name | Since | Total Exp" table inside a fund-manager block, which default extraction
+# breaks line by line (HDFC, Aug 2026):
+#   "FUND MANAGER ¥ \nName Since Total Exp \nAmit Ganatra February \n01, 2026 \nOver 19 \nyears
+#    \nBhagyesh Kagalkar \n(Gold/Silver \nInstruments) \nAugust \n26,2026 \nOver 31 \nyears"
+# and SBI (Aug 2026), whose columns are Name | Total Experience | Managing Since:
+#   "Name of Fund \nManagers\nTotal \nExperience\nManaging \nSince\nMr. Anup \nUpadhyay 18 years Dec-2024"
+# Joined into one line, each row is: [title] name, optional (role), optional "N years",
+# start date ("February 01, 2026" or "Dec-2024").
+_FM_BLOCK_RE = re.compile(r"fund\s+manager(?:\(s\)|s)?\b", re.IGNORECASE)
+_TABLE_ROW_RE = re.compile(
+    r"(?:(?:Mr|Ms|Mrs|Dr)\.?\s+)?" + _PERSON_RE + r"(?:\s*\([^)]{0,60}\))?"
+    r"(?:\s+\d{1,2}\s+years?)?\s+("
+    + _MONTHS_RE + r"\s+\d{1,2}\s*,\s*\d{4}|" + _MONTHS_RE + r"[-\s]\d{4})\b"
+)
+# Words that look like a capitalised name but are table headers or captions.
+_NOT_A_NAME = {"name", "since", "total", "exp", "over", "years", "fund", "manager", "managers",
+               "scheme", "schemes", "date", "details", "experience", "managing", "overseas",
+               "investment", "investments", "equity", "debt", "dedicated", "portion",
+               "securities", "head", "research", "chief", "officer", "as", "on", "of"}
+
+
+def _strip_non_name_words(name: str) -> str | None:
+    """Drop leading header/caption words a table row ran into ("Total Exp Amit Ganatra" ->
+    "Amit Ganatra", HDFC Aug 2026); None if what's left isn't a 2+ word name or still holds
+    a caption word ("Overseas Investment", Nippon)."""
+    words = name.split()
+    while words and words[0].lower() in _NOT_A_NAME:
+        words.pop(0)
+    if len(words) < 2 or any(w.lower() in _NOT_A_NAME for w in words):
+        return None
+    return " ".join(words)
+_BLOCK_SPAN = 700
+
+
+def extract_paren_since_managers(text: str) -> list[ExtractedManager]:
+    out = []
+    for m in _PAREN_SINCE_RE.finditer(text):
+        name = _normalise_name(m.group(1))
+        if not _NAME_RE.match(name):
+            continue
+        out.append(ExtractedManager(name=name, managing_since=_parse_since_date(m.group(2)),
+                                    raw_text=m.group(0)[:300], confidence="high"))
+    return out
+
+
+def extract_table_managers(text: str) -> list[ExtractedManager]:
+    out = []
+    for block in _FM_BLOCK_RE.finditer(text):
+        flat = " ".join(text[block.end():block.end() + _BLOCK_SPAN].split())
+        for m in _TABLE_ROW_RE.finditer(flat):
+            name = _strip_non_name_words(_normalise_name(m.group(1)))
+            if name is None or not _NAME_RE.match(name):
+                continue
+            out.append(ExtractedManager(name=name, managing_since=_parse_since_date(m.group(2)),
+                                        raw_text=m.group(0)[:300], confidence="high"))
+    return out
 
 
 # ---- public API ------------------------------------------------------------
@@ -64,6 +185,25 @@ class ExtractedManager:
     managing_since: str | None  # ISO date if parseable; raw string otherwise
     raw_text: str           # the sentence/block we read this from
     confidence: str         # 'high' | 'low'
+    managing_until: str | None = None  # ISO end date when the factsheet prints one
+
+
+# "(Effective till March 31, 2026)" right after a name (Kotak Jul 2026, a manager whose tenure
+# had already ended but who is still printed).
+_UNTIL_RE = re.compile(
+    r"^[\s,&]*\(?\s*(?:effective\s+)?(?:till|until|upto)\s+("
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}"
+    r"|\d{1,2}[- ](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[- ,]+\d{4})",
+    re.IGNORECASE,
+)
+
+
+def _managing_until(text: str, name: str) -> str | None:
+    for m in re.finditer(re.escape(name), text):
+        u = _UNTIL_RE.match(" ".join(text[m.end():m.end() + 80].split()))
+        if u:
+            return _parse_since_date(u.group(1))
+    return None
 
 
 def _parse_since_date(raw: str) -> str:
@@ -71,7 +211,10 @@ def _parse_since_date(raw: str) -> str:
     from datetime import datetime
     formats = [
         "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%d %b %y",
-        "%B %d, %Y", "%B %d %Y", "%d/%m/%Y", "%d/%m/%y",
+        "%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y", "%b. %d, %Y",
+        "%d-%B-%Y", "%d %B %Y", "%d %B, %Y", "%B %d,%Y", "%d/%m/%Y", "%d/%m/%y",
+        # Month-precision starts (Nippon "Jan 2023", SBI "Dec-2024") -> first of the month.
+        "%b %Y", "%B %Y", "%b-%Y", "%B-%Y", "%b, %Y", "%B, %Y",
     ]
     for fmt in formats:
         try:
@@ -108,7 +251,12 @@ def extract_managers_from_text(text: str) -> list[ExtractedManager]:
         # additional co-manager names that may follow on the same line.
         tail_start = match.end()
         tail_end = min(len(text), tail_start + 120)
-        tail = text[tail_start:tail_end].split("\n")[0]  # first line after label
+        lines_after = text[tail_start:tail_start + 240].split("\n")
+        tail = lines_after[0]  # first line after label
+        # A co-manager list that wraps after its connector continues on the next line
+        # (Kotak, Aug 2026: "Fund Manager*: Mr. Deepak Agrawal & \n Mr. Sunil Pandey").
+        if re.search(r"(?:&|,|\band)\s*$", raw_names_block + tail) and len(lines_after) > 1:
+            tail = tail + " " + lines_after[1]
         full_block = raw_names_block + tail
 
         # Extract the managing-since date from the full_block BEFORE splitting on
@@ -155,7 +303,13 @@ def extract_managers_from_pages(pages: list) -> list[ExtractedManager]:
     dates, the earliest date wins (most likely the first factsheet to mention them)."""
     by_name: dict[str, ExtractedManager] = {}
     for page in pages:
-        for em in extract_managers_from_text(page.text):
+        for em in (extract_titled_managers(page.text) + extract_paren_since_managers(page.text)
+                   + extract_table_managers(page.text) + extract_managers_from_text(page.text)):
+            clean = _strip_non_name_words(em.name)
+            if clean is None:
+                continue
+            em.name = clean
+            em.managing_until = em.managing_until or _managing_until(page.text, clean)
             if em.name not in by_name:
                 by_name[em.name] = em
             else:
